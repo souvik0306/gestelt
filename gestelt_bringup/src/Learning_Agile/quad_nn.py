@@ -123,7 +123,7 @@ def t_output(inputs):
     inputs = np.array(inputs[0])
     
     outputs = np.zeros(output_size)
-    outputs[0:3]=mission_cfg['mission']['gate_position']
+    outputs[0:3]=mission_cfg['mission']['gate_position']-inputs[0:3] #relative position w.r.t the drone
     # R_gate=inputs[-9:].reshape(3,3)
     # outputs[3:12]=R_gate.T.flatten()
     outputs[3:12]=np.eye(3).flatten()
@@ -131,14 +131,14 @@ def t_output(inputs):
 
     ## traversal time is proportional to the distance of the centroids
     if inputs[1]>0:
-        raw_time = round(magni(inputs[0:3]-outputs[0:3])/desired_average_vel,1) #3
+        raw_time = round(magni(inputs[0:3]-mission_cfg['mission']['gate_position'])/desired_average_vel,1) #3
        
     else:
-        raw_time = -round(magni(inputs[0:3]-outputs[0:3])/desired_average_vel_after_gate,1) #4
+        raw_time = -round(magni(inputs[0:3]-mission_cfg['mission']['gate_position'])/desired_average_vel_after_gate,1) #4
    
     outputs[-1] = raw_time #np.clip(raw_time,3,3)
 
-    print('desired_traversing_time',outputs[-1])
+    # print('desired_traversing_time',outputs[-1])
 
     
     return outputs
@@ -271,7 +271,8 @@ class network_with_GRU(nn.Module):
         out [:,0:2]=torch.tanh(out[:,0:2])*3
         
         # traverse position z
-        out [:,2] = torch.sigmoid(out[:,2])*2+0.5
+        # out [:,2] = torch.sigmoid(out[:,2])*2+0.5 # absolute position
+        out [:,2] = torch.tanh(out[:,2])*2 # relative position
 
         # wrp
         out [:,-4]=torch.sigmoid(out[:,-4])*50+10

@@ -17,7 +17,9 @@ class Quadrotor:
         self.options = options
         # define the state of the quadrotor
         rx, ry, rz = SX.sym('rx'), SX.sym('ry'), SX.sym('rz')
+        cur_rx, cur_ry, cur_rz = SX.sym('cur_rx'), SX.sym('cur_ry'), SX.sym('cur_rz')
         self.r_I = vertcat(rx, ry, rz)
+        self.cur_r_I = vertcat(cur_rx, cur_ry, cur_rz)
         vx, vy, vz = SX.sym('vx'), SX.sym('vy'), SX.sym('vz')
         self.v_I = vertcat(vx, vy, vz)
         # quaternions attitude of B w.r.t. I
@@ -41,7 +43,8 @@ class Quadrotor:
  
 
         # define desire traverse pose and time
-        self.des_tra_r_I = vertcat(SX.sym('des_tra_rx'), SX.sym('des_tra_ry'), SX.sym('des_tra_rz'))
+        self.des_tra_r_B = vertcat(SX.sym('des_tra_rx_B'), SX.sym('des_tra_ry_B'), SX.sym('des_tra_rz_B'))
+        self.des_tra_r_I = vertcat(SX.sym('des_tra_rx_I'), SX.sym('des_tra_ry_I'), SX.sym('des_tra_rz_I'))
         self.des_tra_rodi_param=vertcat(SX.sym('des_tra_rodi_param0'),SX.sym('des_tra_rodi_param1'),SX.sym('des_tra_rodi_param2'))
 
         ##==traverse pose 9D vector == ##
@@ -57,12 +60,13 @@ class Quadrotor:
         self.t_node = SX.sym('t_node')
         # self.traverse_weight_span = SX.sym('traverse_weight_span ')
         # define desired goal state
-        self.goal_r_I  = vertcat(SX.sym('des_goal_rx'), SX.sym('des_goal_ry'), SX.sym('des_goal_rz'))
+        self.goal_r_B = vertcat(SX.sym('des_goal_rx_B'), SX.sym('des_goal_ry_B'), SX.sym('des_goal_rz_B'))
+        self.goal_r_I  = vertcat(SX.sym('des_goal_rx_I'), SX.sym('des_goal_ry_I'), SX.sym('des_goal_rz_I'))
         self.goal_v_I = vertcat(SX.sym('des_goal_vx'), SX.sym('des_goal_vy'), SX.sym('des_goal_vz'))
         self.goal_q = vertcat(SX.sym('des_goal_q0'), SX.sym('des_goal_q1'), SX.sym('des_goal_q2'), SX.sym('des_goal_q3'))
         self.goal_w_B= vertcat(SX.sym('des_goal_wx'), SX.sym('des_goal_wy'), SX.sym('des_goal_wz'))
         
-        self.goal_state=vertcat(self.goal_r_I,self.goal_v_I,self.goal_q)#,self.goal_w_B)
+        self.goal_state=vertcat(self.goal_r_B,self.goal_v_I,self.goal_q)#,self.goal_w_B)
 
         ###################################################################
         ###-----------ellipse drone collision detection-----------------###
@@ -264,6 +268,7 @@ class Quadrotor:
         ## goal cost
         # goal position in the world frame
         # self.goal_r_I is the external variable of the acados
+        self.goal_r_I = self.goal_r_B + self.cur_r_I
         self.cost_r_I_g = dot(self.r_I - self.goal_r_I, self.r_I - self.goal_r_I)
 
         # goal velocity
@@ -327,11 +332,11 @@ class Quadrotor:
         ## set traverse pose as the auxiliary variables (hyperparameters)
         if self.options['JAX_SVD']: 
             ## SVD conducted before CasADi
-            self.trav_auxvar = vertcat(self.des_tra_r_I, self.des_tra_R, self.wrp, self.max_tra_w, self.wrt, self.wqt, self.des_t_tra) 
+            self.trav_auxvar = vertcat(self.des_tra_r_B, self.des_tra_R, self.wrp, self.max_tra_w, self.wrt, self.wqt, self.des_t_tra) 
             tra_R_B_I = casadi.reshape(self.des_tra_R,3,3)
         else:   
             svd= SVD()
-            self.trav_auxvar = vertcat(self.des_tra_r_I, self.des_tra_m,self.wrp, self.wrt, self.wqt, self.des_t_tra) #self.wrp,  self.max_tra_w, 
+            self.trav_auxvar = vertcat(self.des_tra_r_B, self.des_tra_m,self.wrp, self.wrt, self.wqt, self.des_t_tra) #self.wrp,  self.max_tra_w, 
             tra_R_B_I= svd.SVD_M_to_SO3_casadi(self.des_tra_m)
        
         
@@ -346,7 +351,8 @@ class Quadrotor:
         
 
         ## =========== traverse cost =========##
-        # posotion error
+        # absolute position = goal position + current position
+        self.des_tra_r_I = self.des_tra_r_B+self.cur_r_I
         self.cost_r_I_t = dot(self.r_I - self.des_tra_r_I, self.r_I - self.des_tra_r_I)
 
         # attitude error

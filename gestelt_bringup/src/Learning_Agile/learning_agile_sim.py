@@ -335,9 +335,10 @@ class LearningAgileSim():
                                        self.gate_t_i)
         nn_output = self.model(torch.tensor(obs.reshape([1,5,-1]), dtype=torch.float).to(device))[0]
         out = nn_output.to('cpu').data.numpy()
-
+        abs_out=out.copy()
+        abs_out[0:3]=out[0:3]+self.state[0:3]
         verify_tra_R=verify_SVD_casadi(out[3:12])
-        self.log_NN_IO_for_RM(self.gate_pitch,out,verify_tra_R.flatten()) 
+        self.log_NN_IO_for_RM(self.gate_pitch,abs_out,verify_tra_R.flatten()) 
         return out 
     
     def imiate_NN_forward(self):
@@ -389,7 +390,7 @@ class LearningAgileSim():
 
                     # manually set the traversal time and pose
                     out=np.zeros(output_size)
-                    out[0:3]=self.gate_center
+                    out[0:3]=self.gate_center-self.state[0:3] #relative gate points
                     # out[3:6]=self.gate_ori_RP # Rodrigues parameters
                     out[3:12]=self.gate_ori_9d # manual set 9D vector (is rotation matrix directly)
                     print("="*50)
@@ -408,8 +409,11 @@ class LearningAgileSim():
                     ### SVD through CasADi
                     verify_tra_R=verify_SVD_casadi(out[3:12])
                     gate_pitch=0
-                    self.log_NN_IO_for_RM(gate_pitch,out,verify_tra_R.flatten())  
-
+                    
+                    abs_out=out.copy()
+                    abs_out[0:3]=out[0:3]+self.state[0:3]
+                    self.log_NN_IO_for_RM(gate_pitch,abs_out,verify_tra_R.flatten())  
+                    trav_auxvar_value = out
                             
                 else:
                     
@@ -423,8 +427,6 @@ class LearningAgileSim():
                         out[0:3]=self.gate_t_i.centroid+out[0:3]
                         trav_auxvar_value = out
                     
-    
-                
                 t_comp = time.time()
                 cmd_solution,NO_SOLUTION_FLAG  = self.planner.mpc_update(current_state=self.state,
                                                         trav_auxvar_value=trav_auxvar_value)

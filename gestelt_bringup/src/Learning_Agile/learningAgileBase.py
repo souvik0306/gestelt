@@ -61,7 +61,7 @@ class LearningAgileBase:
 
     def reset(self,cur_epoch: int=0):
         #== random generate the env and set to the mpc solver
-        self.learning_agile_sim.generate_mission(cur_epoch,TEST=False)
+        self.learning_agile_sim.generate_mission(cur_epoch,TEST=True)
         
         self.state = self.planner.ini_state
 

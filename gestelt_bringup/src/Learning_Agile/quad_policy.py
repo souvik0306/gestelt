@@ -73,7 +73,8 @@ class PlanFwdBwdWrapper():
                                                            -sc,-sc,-sc,-sc],\
                                      state_ub=[pos_b,pos_b,pos_ub_z,
                                                vel_b,vel_b,vel_b,
-                                               sc,sc,sc,sc]) 
+                                               sc,sc,sc,sc],
+                                     cur_r_I=self.uav1.cur_r_I) 
         
       
         self.uavoc1.setAuxvarVariable()

@@ -13,6 +13,6 @@ training:
   lr_decay_num_epochs: 100
 
 model:
-  input_size: 25 # current drone state (10), goal position (3),gate points (4x3)    #, gate position(3),  gate width(1) and orientation(9)
+  input_size: 25 # current drone state (10), goal position (3)w.r.t drone pos,gate points (4x3) w.r.t drone pos    #, gate position(3),  gate width(1) and orientation(9)
   hidden_size: 256
-  output_size: 16 # tra_pos(3), tra_9D_orientation(9),wrp, wrt, wqt, traversing_time(1) #
+  output_size: 16 # tra_pos(3) w.r.t drone pos, tra_9D_orientation(9),wrp, wrt, wqt, traversing_time(1) #
