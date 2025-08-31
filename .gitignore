@@ -21,7 +21,7 @@ devel_isolated/
 *.cfgc
 /cfg/cpp/
 /cfg/*.py
-
+.catkin_build/*
 # Ignore generated docs
 *.dox
 *.wikidoc
