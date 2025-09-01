@@ -61,8 +61,23 @@ Ensure the output shows:
 ```bash
 rosservice call /mavros/cmd/arming "value: true"
 ```
+Example output:
+```
+success: True
+result: 0
+```
 
-### 6. Send takeoff command (altitude: 2.0m)
+### 6. Set mode to AUTO.TAKEOFF
+
+```bash
+rosservice call /mavros/set_mode "custom_mode: 'AUTO.TAKEOFF'"
+```
+Example output:
+```
+mode_sent: True
+```
+
+### 7. Send takeoff command (altitude: 2.0m)
 
 ```bash
 rosservice call /mavros/cmd/takeoff "min_pitch: 0.0
@@ -72,13 +87,13 @@ longitude: 0.0
 altitude: 2.0"
 ```
 
-### 7. (Optional) Land the drone
+### 8. (Optional) Land the drone
 
 ```bash
 rosservice call /mavros/cmd/land "{}"
 ```
 
-### 8. (Optional) Run IMU Inference Node
+### 9. (Optional) Run IMU Inference Node
 
 ```bash
 rosrun imu_listener_pkg imu_listener.py
