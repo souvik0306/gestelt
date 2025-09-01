@@ -37,7 +37,7 @@ mv imu_listener_pkg src/
 Navigate to your workspace root and build:
 ```sh
 cd ~/Downloads/gestelt
-catkin build imu_listener_pkg        # or catkin_make if that’s what the repo uses
+catkin build imu_listener_pkg        # or simply catkin_make if that’s what the repo uses
 ```
 
 ### 4. Source the Workspace

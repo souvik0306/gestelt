@@ -10,7 +10,7 @@ WORKSPACE=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 source "$WORKSPACE/devel/setup.bash"
 
 # === [4] Start roscore in background if not already running
-if ! pgrep -f "roscore" > /dev/null; then
+if ! rosnode list &> /dev/null; then
     echo "[INFO] Starting roscore..."
     gnome-terminal -- bash -c "roscore; exec bash" &
     sleep 3  # give it time to start
