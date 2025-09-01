@@ -18,8 +18,8 @@ else
     echo "[INFO] roscore already running."
 fi
 
-# === [5] Optional: Rosbag path (if using fallback simulation)
-BAG_FILE="$WORKSPACE/src/imu_listener_pkg/bags/MH_05_difficult.bag"
+# # === [5] Optional: Rosbag path (if using fallback simulation)
+# BAG_FILE="$WORKSPACE/src/imu_listener_pkg/bags/MH_05_difficult.bag"
 
 # === [6] Launch inference node
 roslaunch imu_listener_pkg inference.launch
