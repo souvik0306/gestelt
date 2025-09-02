@@ -29,6 +29,7 @@ export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:~/src/PX4-Autopilot
 ```bash
 cd ~/src/PX4-Autopilot
 make px4_sitl_default gazebo
+make px4_sitl gazebo
 ```
 
 ### 3. Launch MAVROS in a new terminal
