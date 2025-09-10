@@ -10,7 +10,7 @@ from std_msgs.msg import Header
 import sys
 
 # --- configuration ---
-SEQLEN   = 200        # Number of IMU samples per inference window
+SEQLEN   = 50        # Number of IMU samples per inference window
 INTERVAL = 9          # Interval between inference windows
 OVERLAP  = INTERVAL + 1  # Number of samples kept between windows for overlap
 
