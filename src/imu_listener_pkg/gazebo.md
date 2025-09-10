@@ -7,7 +7,7 @@ This guide describes how to simulate a drone using PX4 SITL in Gazebo with MAVRO
 ## Prerequisites
 
 - ROS Noetic installed
-- PX4 Firmware cloned at `~/src/PX4-Autopilot`
+- PX4 Firmware cloned at `~/Downloads/gestelt_ws/PX4-Autopilot`
 - MAVROS installed
 - All required `source` paths set correctly
 - Gazebo world launches and displays the drone
@@ -20,19 +20,29 @@ This guide describes how to simulate a drone using PX4 SITL in Gazebo with MAVRO
 
 ```bash
 source /opt/ros/noetic/setup.bash
-source ~/src/PX4-Autopilot/Tools/setup_gazebo.bash ~/src/PX4-Autopilot ~/src/PX4-Autopilot/build/px4_sitl_default
-export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:~/src/PX4-Autopilot
+source ~/Downloads/gestelt_ws/PX4-Autopilot/Tools/setup_gazebo.bash ~/Downloads/gestelt_ws/PX4-Autopilot ~/Downloads/gestelt_ws/PX4-Autopilot/build/px4_sitl_default
+export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:~/Downloads/gestelt_ws/PX4-Autopilot
 ```
 
 ### 2. Launch PX4 SITL and Gazebo
 
 ```bash
-cd ~/src/PX4-Autopilot
-make px4_sitl_default gazebo
+cd ~/Downloads/gestelt_ws/PX4-Autopilot
 make px4_sitl gazebo
 ```
+or
+```bash
+make px4_sitl_default gazebo
+```
 
-### 3. Launch MAVROS in a new terminal
+### 3. (Alternative) Launch SITL Drone Bringup Script
+
+```bash
+cd ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/scripts
+./sitl_drone_bringup.sh
+```
+
+### 4. Launch MAVROS in a new terminal
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -45,7 +55,7 @@ Wait for output similar to:
 [ INFO] Ready for takeoff!
 ```
 
-### 4. Check MAVROS connection
+### 5. Check MAVROS connection
 
 ```bash
 rostopic echo /mavros/state
@@ -57,7 +67,7 @@ Ensure the output shows:
 - `armed: False` (initially)
 - `mode: MANUAL` or `AUTO.TAKEOFF`
 
-### 5. Arm the drone
+### 6. Arm the drone
 
 ```bash
 rosservice call /mavros/cmd/arming "value: true"
@@ -68,7 +78,7 @@ success: True
 result: 0
 ```
 
-### 6. Set mode to AUTO.TAKEOFF
+### 7. Set mode to AUTO.TAKEOFF
 
 ```bash
 rosservice call /mavros/set_mode "custom_mode: 'AUTO.TAKEOFF'"
@@ -78,7 +88,7 @@ Example output:
 mode_sent: True
 ```
 
-### 7. Send takeoff command (altitude: 2.0m)
+### 8. Send takeoff command (altitude: 2.0m)
 
 ```bash
 rosservice call /mavros/cmd/takeoff "min_pitch: 0.0
@@ -88,13 +98,13 @@ longitude: 0.0
 altitude: 2.0"
 ```
 
-### 8. (Optional) Land the drone
+### 9. (Optional) Land the drone
 
 ```bash
 rosservice call /mavros/cmd/land "{}"
 ```
 
-### 9. (Optional) Run IMU Inference Node
+### 10. (Optional) Run IMU Inference Node
 
 ```bash
 rosrun imu_listener_pkg imu_listener.py
