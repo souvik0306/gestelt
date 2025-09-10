@@ -109,3 +109,14 @@ rosservice call /mavros/cmd/land "{}"
 ```bash
 rosrun imu_listener_pkg imu_listener.py
 ```
+
+### 11. Switching Branch and Running SITL Drone Bringup
+
+To switch to the `19_April_agile_demo` git branch and run the SITL drone bringup script:
+
+```sh
+cd ~/Downloads/gestelt_ws/src/gestelt
+git checkout 19_April_agile_demo
+cd gestelt_bringup/scripts
+./sitl_drone_bringup.sh
+```
