@@ -20,7 +20,7 @@ devel_isolated/
 *.cfgc
 /cfg/cpp/
 /cfg/*.py
-
+*.pickle
 # Ignore generated docs
 *.dox
 *.wikidoc
