@@ -3,10 +3,20 @@
 > **Quick Start:**
 >
 > - **First time or after code changes:**  
->   Run `./build_and_launch.sh` from the package directory to build and launch.
+>   First, switch to the correct branch:
+>   ```sh
+>   cd ~/Downloads/gestelt/src/imu_listener_pkg
+>   git checkout tianchen_learning_agile
+>   ./build_and_launch.sh
+>   ```
+>   from the package directory to build and launch.
 >
 > - **Subsequent runs (workspace already built):**  
->   Run `./scripts/start_inference.sh` to launch inference only.
+>   Run:
+>   ```sh
+>   ./scripts/start_inference.sh
+>   ```
+>   to launch inference only.
 
 ---
 
