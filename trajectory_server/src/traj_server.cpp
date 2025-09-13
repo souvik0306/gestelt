@@ -62,7 +62,7 @@ void TrajServer::init(ros::NodeHandle& nh)
   /* Publishers */
   /////////////////
   pos_cmd_raw_pub_ = nh.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 50);
-  uav_path_pub_ = nh.advertise<nav_msgs::Path>("/uav_path_trajectory", 50);
+  uav_path_pub_ = nh.advertise<nav_msgs::Path>("/uav_path_trajectory", 1, true);
   server_state_pub_ = nh.advertise<gestelt_msgs::CommanderState>("/traj_server/state", 50);
   // reference_pub_ = nh.advertise<geometry_msgs::TwistStamped>("/reference/setpoint_test", 50);
   flat_reference_pub_ = nh.advertise<controller_msgs::FlatTarget>("/reference/flatsetpoint", 50);
@@ -187,6 +187,7 @@ void TrajServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
   }
 
   uav_pose_ = *msg;
+  uav_pose_.header.frame_id = origin_frame_;
   uav_poses_.push_back(uav_pose_);
 
   if (uav_poses_.size() > uint16_t(uav_pose_history_size_)) {
