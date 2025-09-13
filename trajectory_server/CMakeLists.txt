@@ -12,6 +12,9 @@ set(ROS_LIBRARIES
   mavros_msgs
   gestelt_msgs
   controller_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
 )
 
 # set(ROS_DEPENDS

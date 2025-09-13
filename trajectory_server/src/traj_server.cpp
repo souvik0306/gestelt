@@ -62,7 +62,7 @@ void TrajServer::init(ros::NodeHandle& nh)
   /* Publishers */
   /////////////////
   pos_cmd_raw_pub_ = nh.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 50);
-  uav_path_pub_ = nh.advertise<nav_msgs::Path>("/uav_path_trajectory", 50);
+  uav_path_pub_ = nh.advertise<nav_msgs::Path>("/uav_path_trajectory", 1, true);
   server_state_pub_ = nh.advertise<gestelt_msgs::CommanderState>("/traj_server/state", 50);
   // reference_pub_ = nh.advertise<geometry_msgs::TwistStamped>("/reference/setpoint_test", 50);
   flat_reference_pub_ = nh.advertise<controller_msgs::FlatTarget>("/reference/flatsetpoint", 50);
@@ -86,6 +86,8 @@ void TrajServer::init(ros::NodeHandle& nh)
   USE_FORCE = mavros_msgs::PositionTarget::FORCE;
   IGNORE_YAW = mavros_msgs::PositionTarget::IGNORE_YAW;
   IGNORE_YAW_RATE = mavros_msgs::PositionTarget::IGNORE_YAW_RATE;
+
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(tf_buffer_);
 
   logInfo("Initialized");
 }
@@ -186,12 +188,27 @@ void TrajServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
     }
   }
 
-  uav_pose_ = *msg; 
-  uav_poses_.push_back(uav_pose_);
+  geometry_msgs::PoseStamped pose_world;
+  try {
+    tf_buffer_.transform(*msg, pose_world, origin_frame_, ros::Duration(0.1));
+  } catch (tf2::TransformException &ex) {
+    logWarnThrottled(string_format("Transform to %s failed: %s", origin_frame_.c_str(), ex.what()), 1.0);
+    return;
+  }
+
+  uav_pose_ = pose_world;
+  uav_poses_.push_back(pose_world);
 
   if (uav_poses_.size() > uint16_t(uav_pose_history_size_)) {
     uav_poses_.pop_front(); // Remove the oldest pose
   }
+
+  // Publish updated path for real-time visualization
+  nav_msgs::Path uav_path;
+  uav_path.header.stamp = ros::Time::now();
+  uav_path.header.frame_id = origin_frame_;
+  uav_path.poses.assign(uav_poses_.begin(), uav_poses_.end());
+  uav_path_pub_.publish(uav_path);
 
 }
 
@@ -499,14 +516,6 @@ void TrajServer::debugTimerCb(const ros::TimerEvent &e){
   state_msg.armed = uav_current_state_.armed;
 
   server_state_pub_.publish(state_msg);
-
-  // Publish UAV Pose history
-  nav_msgs::Path uav_path;
-  uav_path.header.stamp = ros::Time::now();
-  uav_path.header.frame_id = origin_frame_; 
-  uav_path.poses = std::vector<geometry_msgs::PoseStamped>(uav_poses_.begin(), uav_poses_.end());
-
-  uav_path_pub_.publish(uav_path);
 }
 
 /*circular traj callback*/

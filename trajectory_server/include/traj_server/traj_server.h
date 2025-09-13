@@ -21,6 +21,8 @@
 #include <std_msgs/String.h>
 #include <std_msgs/Bool.h>
 #include <trajectory_msgs/MultiDOFJointTrajectory.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #include <gestelt_msgs/CommanderCommand.h>
 #include <gestelt_msgs/CommanderState.h>
@@ -417,6 +419,8 @@ private: // Member variables
 
   geometry_msgs::PoseStamped uav_pose_; // Current pose of UAV
   nav_msgs::Odometry uav_odom_; // Current odometry of UAV
+  tf2_ros::Buffer tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   std::deque<geometry_msgs::PoseStamped> uav_poses_; // History of UAV poses
 
   // Last received mission PVAJ (position, velocity, acceleration, Jerk)
