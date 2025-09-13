@@ -186,12 +186,19 @@ void TrajServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
     }
   }
 
-  uav_pose_ = *msg; 
+  uav_pose_ = *msg;
   uav_poses_.push_back(uav_pose_);
 
   if (uav_poses_.size() > uint16_t(uav_pose_history_size_)) {
     uav_poses_.pop_front(); // Remove the oldest pose
   }
+
+  // Publish updated path for real-time visualization
+  nav_msgs::Path uav_path;
+  uav_path.header.stamp = ros::Time::now();
+  uav_path.header.frame_id = origin_frame_;
+  uav_path.poses.assign(uav_poses_.begin(), uav_poses_.end());
+  uav_path_pub_.publish(uav_path);
 
 }
 
@@ -499,14 +506,6 @@ void TrajServer::debugTimerCb(const ros::TimerEvent &e){
   state_msg.armed = uav_current_state_.armed;
 
   server_state_pub_.publish(state_msg);
-
-  // Publish UAV Pose history
-  nav_msgs::Path uav_path;
-  uav_path.header.stamp = ros::Time::now();
-  uav_path.header.frame_id = origin_frame_; 
-  uav_path.poses = std::vector<geometry_msgs::PoseStamped>(uav_poses_.begin(), uav_poses_.end());
-
-  uav_path_pub_.publish(uav_path);
 }
 
 /*circular traj callback*/
