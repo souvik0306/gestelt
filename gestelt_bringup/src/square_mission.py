@@ -136,10 +136,11 @@ def main():
     vels = []
 
     # 2 m square starting from current hover position (0, 1.8, 1.2)
-    waypoints.append(create_pose(2.0, 1.8, 1.2))
-    waypoints.append(create_pose(2.0, 3.8, 1.2))
-    waypoints.append(create_pose(0.0, 3.8, 1.2))
-    waypoints.append(create_pose(0.0, 1.8, 1.2))
+    waypoints.append(create_pose(0.0, 0.0, 1.2))
+    waypoints.append(create_pose(2.0, 0.0, 1.2))
+    waypoints.append(create_pose(2.0, 2.0, 1.2))
+    waypoints.append(create_pose(0.0, 2.0, 1.2))
+    waypoints.append(create_pose(0.0, 0.0, 1.2))
 
     for _ in waypoints:
         accels.append(create_accel(None, None, None))
