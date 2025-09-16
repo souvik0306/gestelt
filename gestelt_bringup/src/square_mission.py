@@ -124,10 +124,11 @@ def main():
 
     # Define square corners at 1.2 m altitude
     corners = [
-        create_pose(2.0, 1.8, 1.2),
-        create_pose(2.0, 3.8, 1.2),
-        create_pose(0.0, 3.8, 1.2),
-        create_pose(0.0, 1.8, 1.2),
+        create_pose(0.0, 0.0, 1.2),
+        create_pose(2.0, 0.0, 1.2),
+        create_pose(2.0, 2.0, 1.2),
+        create_pose(0.0, 2.0, 1.2),
+        create_pose(0.0, 0.0, 1.2)
     ]
 
     for idx, corner in enumerate(corners):
