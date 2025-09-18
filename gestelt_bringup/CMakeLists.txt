@@ -26,3 +26,9 @@ catkin_package(
 ###########
 ## Build ##
 ###########
+
+catkin_install_python(
+  PROGRAMS
+    src/local_position_logger.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
