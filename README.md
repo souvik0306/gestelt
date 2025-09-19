@@ -115,11 +115,14 @@ node records `/mavros/local_position/pose` samples into NumPy arrays under
 You can convert those arrays into a 3D plot with:
 
 ```bash
-rosrun gestelt_bringup plot_local_position.py --output trajectory.png
+python3 ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/scripts/plot_local_position.py \
+  --positions ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/positions.npy \
+  --timestamps ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/timestamps.npy \
+  --output ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/trajectory.png
 ```
 
-Use `--show` to open an interactive window or `--help` for additional options such as
-custom input paths and camera angles.
+Use `--show` to open an interactive window or `--help` for additional options such as custom input paths and camera
+angles.
 
 # Acknowledgements
 1. [EGO-Planner-V2 repo](https://github.com/ZJU-FAST-Lab/EGO-Planner-v2)
