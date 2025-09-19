@@ -138,14 +138,15 @@ def _make_trajectory_plot(
     ax.set_title("MAVROS Local Position Trajectory")
     ax.view_init(elev=elev, azim=azim)
 
-    # Equal aspect ratio for XYZ dimensions.
+    # Equal aspect ratio for XYZ dimensions, with margin for better visibility.
     ranges = np.ptp(positions, axis=0)
     max_range = np.max(ranges)
     if max_range == 0:
         max_range = 1.0
+    margin = 0.15 * max_range  # 15% margin
     midpoints = np.mean(positions, axis=0)
     for center, axis in zip(midpoints, [ax.set_xlim, ax.set_ylim, ax.set_zlim]):
-        axis(center - max_range / 2.0, center + max_range / 2.0)
+        axis(center - max_range / 2.0 - margin, center + max_range / 2.0 + margin)
 
     return fig
 
@@ -169,7 +170,7 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output, bbox_inches="tight", dpi=150)
+        fig.savefig(args.output, bbox_inches="tight", dpi=600)
         print(f"Saved 3D trajectory plot to {args.output}")
 
     if args.show:
