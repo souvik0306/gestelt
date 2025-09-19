@@ -26,3 +26,10 @@ catkin_package(
 ###########
 ## Build ##
 ###########
+
+catkin_install_python(
+  PROGRAMS
+    src/local_position_logger.py
+    scripts/plot_local_position.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
