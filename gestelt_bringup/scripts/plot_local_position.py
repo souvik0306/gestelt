@@ -111,7 +111,7 @@ def _make_trajectory_plot(
     elev: float,
     azim: float,
 ) -> plt.Figure:
-    fig = plt.figure(figsize=(10, 6))
+    fig = plt.figure(figsize=(12, 6))
     ax = fig.add_subplot(projection="3d")
 
     xs, ys, zs = positions.T
@@ -206,6 +206,11 @@ def _make_xy_plot(
     ax.set_title("XY Trajectory Projection")
     ax.axis("equal")
     ax.grid(True)
+
+    # Mark start (green) and end (red) points
+    ax.scatter(positions[0, 0], positions[0, 1], color='lime', s=60, label='Start', edgecolor='k', zorder=10)
+    ax.scatter(positions[-1, 0], positions[-1, 1], color='red', s=60, label='End', edgecolor='k', zorder=10)
+    ax.legend(loc="best")
 
     if output is not None:
         out_path = output.parent / (output.stem + "_xy.png")
