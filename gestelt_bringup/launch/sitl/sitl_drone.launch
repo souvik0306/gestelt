@@ -38,7 +38,16 @@
   </node>
 
   <!-- RVIZ -->
-  <node name="rviz" pkg="rviz" type="rviz" required="true" 
+  <node name="rviz" pkg="rviz" type="rviz" required="true"
     args="-d $(find gestelt_bringup)/launch/rviz/gz_sim.rviz"/>
+
+  <!-- Log MAVROS local position data for post-processing -->
+  <node pkg="gestelt_bringup"
+        type="local_position_logger.py"
+        name="local_position_logger"
+        output="screen">
+    <param name="topic" value="/mavros/local_position/pose"/>
+    <param name="output_directory" value="$(env HOME)/gestelt_ws/collected_poses"/>
+  </node>
 
 </launch>

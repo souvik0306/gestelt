@@ -107,6 +107,20 @@ The second one is a fake drone with no physics and be used to test the architect
 3. Minimum Snap Trajectory Planner and Sampler.
 4. Mission commands.
 
+## Recording and plotting MAVROS local position data
+When you launch the SITL bringup via `sitl_drone_bringup.sh`, the `local_position_logger`
+node records `/mavros/local_position/pose` samples into NumPy arrays under
+`~/gestelt_ws/collected_poses/` by default (`timestamps.npy` and `positions.npy`).
+
+You can convert those arrays into a 3D plot with:
+
+```bash
+rosrun gestelt_bringup plot_local_position.py --output trajectory.png
+```
+
+Use `--show` to open an interactive window or `--help` for additional options such as
+custom input paths and camera angles.
+
 # Acknowledgements
 1. [EGO-Planner-V2 repo](https://github.com/ZJU-FAST-Lab/EGO-Planner-v2)
 2. [ETHZ-ASL/mav_trajectory_generation](https://github.com/ethz-asl/mav_trajectory_generation)
