@@ -111,7 +111,7 @@ def _make_trajectory_plot(
     elev: float,
     azim: float,
 ) -> plt.Figure:
-    fig = plt.figure(figsize=(8, 6))
+    fig = plt.figure(figsize=(12, 6))
     ax = fig.add_subplot(projection="3d")
 
     xs, ys, zs = positions.T
@@ -132,22 +132,95 @@ def _make_trajectory_plot(
             )
         ax.plot(xs, ys, zs, linewidth=2.0, color="#1f77b4")
 
+    # Mark start (green) and end (red) points
+    ax.scatter(positions[0, 0], positions[0, 1], color='lime', s=60, label='Start', edgecolor='k', zorder=10)
+    ax.scatter(positions[-1, 0], positions[-1, 1], color='red', s=60, label='End', edgecolor='k', zorder=10)
+    ax.legend(loc="best")
+
     ax.set_xlabel("X [m]")
     ax.set_ylabel("Y [m]")
     ax.set_zlabel("Z [m]")
     ax.set_title("MAVROS Local Position Trajectory")
     ax.view_init(elev=elev, azim=azim)
 
-    # Equal aspect ratio for XYZ dimensions.
+    # Equal aspect ratio for XYZ dimensions, with margin for better visibility.
     ranges = np.ptp(positions, axis=0)
     max_range = np.max(ranges)
     if max_range == 0:
         max_range = 1.0
+    margin = 0.15 * max_range  # 15% margin
     midpoints = np.mean(positions, axis=0)
     for center, axis in zip(midpoints, [ax.set_xlim, ax.set_ylim, ax.set_zlim]):
-        axis(center - max_range / 2.0, center + max_range / 2.0)
+        axis(center - max_range / 2.0 - margin, center + max_range / 2.0 + margin)
 
     return fig
+
+
+def _make_xyz_time_plot(
+    positions: np.ndarray,
+    times: Optional[np.ndarray],
+    output: Optional[Path] = None,
+    show: bool = False,
+):
+    if times is None or times.shape[0] != positions.shape[0]:
+        print("[plot_local_position] Skipping XYZ vs time plot (timestamps missing or mismatched).")
+        return
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+    labels = ['X [m]', 'Y [m]', 'Z [m]']
+    for i, ax in enumerate(axes):
+        ax.plot(times, positions[:, i], label=labels[i])
+        ax.set_ylabel(labels[i])
+        ax.grid(True)
+        ax.legend(loc='best')
+    axes[-1].set_xlabel('Time [s]')
+    fig.suptitle('X, Y, Z Position vs Time')
+
+    if output is not None:
+        out_path = output.parent / (output.stem + "_xyz_vs_time.png")
+        fig.savefig(out_path, bbox_inches="tight", dpi=600)
+        print(f"Saved X/Y/Z vs Time plot to {out_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def _make_xy_plot(
+    positions: np.ndarray,
+    times: Optional[np.ndarray],
+    output: Optional[Path] = None,
+    show: bool = False,
+):
+    fig, ax = plt.subplots(figsize=(7, 7))
+    if times is not None and times.shape[0] == positions.shape[0]:
+        sc = ax.scatter(positions[:, 0], positions[:, 1], c=times, cmap="viridis", s=8)
+        cbar = fig.colorbar(sc, ax=ax)
+        cbar.set_label("Time [s]")
+    else:
+        ax.plot(positions[:, 0], positions[:, 1], label="Trajectory")
+        ax.legend(loc="best")
+    ax.set_xlabel("X [m]")
+    ax.set_ylabel("Y [m]")
+    ax.set_title("XY Trajectory Projection")
+    ax.axis("equal")
+    ax.grid(True)
+
+    # Mark start (green) and end (red) points
+    ax.scatter(positions[0, 0], positions[0, 1], color='lime', s=60, label='Start', edgecolor='k', zorder=10)
+    ax.scatter(positions[-1, 0], positions[-1, 1], color='red', s=60, label='End', edgecolor='k', zorder=10)
+    ax.legend(loc="best")
+
+    if output is not None:
+        out_path = output.parent / (output.stem + "_xy.png")
+        fig.savefig(out_path, bbox_inches="tight", dpi=600)
+        print(f"Saved XY plot to {out_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -169,8 +242,12 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output, bbox_inches="tight", dpi=150)
+        fig.savefig(args.output, bbox_inches="tight", dpi=600)
         print(f"Saved 3D trajectory plot to {args.output}")
+
+    # --- Add this call to generate the XYZ vs time plot ---
+    _make_xyz_time_plot(positions, times, args.output, args.show)
+    _make_xy_plot(positions, times, args.output, args.show)
 
     if args.show:
         plt.show()
