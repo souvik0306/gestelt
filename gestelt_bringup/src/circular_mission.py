@@ -1,157 +1,170 @@
 #!/usr/bin/env python3
-import numpy as np
-import rospy
-from gestelt_msgs.msg import CommanderState, Goals, CommanderCommand
-from geometry_msgs.msg import Pose, Accel,PoseArray,AccelStamped
-from std_msgs.msg import Int8
 import math
-import time
-# Publisher of server events to trigger change of states for trajectory server 
-server_event_pub = rospy.Publisher('/traj_server/command', CommanderCommand, queue_size=10)
-# Publisher of server events to trigger change of states for trajectory server 
-waypoints_pub = rospy.Publisher('/planner/goals', Goals, queue_size=10)
 
-# for visualization
-waypoints_pos_pub = rospy.Publisher('/planner/goals_pos', PoseArray, queue_size=10)
-waypoints_acc_pub = rospy.Publisher('/planner/goals_acc', AccelStamped, queue_size=10)
-# Dictionary of UAV states
+import rospy
+from gestelt_msgs.msg import CommanderCommand, CommanderState, Goals
+from geometry_msgs.msg import Accel, AccelStamped, Pose, PoseArray, Twist
+from std_msgs.msg import Bool
+
+
+server_event_pub = rospy.Publisher(
+    '/traj_server/command', CommanderCommand, queue_size=10)
+waypoints_pub = rospy.Publisher('/planner/goals', Goals, queue_size=10)
+waypoints_pos_pub = rospy.Publisher(
+    '/planner/goals_pos', PoseArray, queue_size=10)
+waypoints_acc_pub = rospy.Publisher(
+    '/planner/goals_acc', AccelStamped, queue_size=10)
+
+
 server_states = {}
 
-# Check if UAV has achived desired traj_server_state
-def check_traj_server_states(des_traj_server_state):
-    if len(server_states.items()) == 0:
-        print("No Server states received!")
+
+def check_traj_server_states(desired_state):
+    """Return True when all drones report the desired traj_server state."""
+    if not server_states:
+        rospy.logwarn("No Server states received!")
         return False
-    
-    for server_state in server_states.items():
-        # print(f"{server_state[0]}: {des_traj_server_state}")
-        if server_state[1].traj_server_state != des_traj_server_state:
+    for state in server_states.values():
+        if state.traj_server_state != desired_state:
             return False
     return True
 
-def publishCommand(event_enum):
-    commander_cmd = CommanderCommand()
-    commander_cmd.command = event_enum
 
-    server_event_pub.publish(commander_cmd)
+def publishCommand(event_enum):
+    cmd = CommanderCommand()
+    cmd.command = event_enum
+    server_event_pub.publish(cmd)
+
 
 def get_server_state_callback():
-    msg = rospy.wait_for_message(f"/traj_server/state", CommanderState, timeout=5.0)
+    msg = rospy.wait_for_message('/traj_server/state', CommanderState,
+                                 timeout=5.0)
     server_states[str(msg.drone_id)] = msg
-    # print("==================")
-    # print(msg)
-    # print("==================")
+
 
 def create_pose(x, y, z):
     pose = Pose()
     pose.position.x = x
     pose.position.y = y
     pose.position.z = z
-
-    pose.orientation.x = 0
-    pose.orientation.y = 0
-    pose.orientation.z = 0
-    pose.orientation.w = 1
-
+    pose.orientation.w = 1.0
     return pose
-def create_accel(acc_x,acc_y,acc_z):
+
+
+def create_accel(ax, ay, az):
     acc = Accel()
-    acc.linear.x = acc_x
-    acc.linear.y = acc_y
-    acc.linear.z = acc_z
-    
-    return acc
+    mask = Bool()
+    if ax is None:
+        mask.data = True
+    else:
+        acc.linear.x = ax
+        acc.linear.y = ay
+        acc.linear.z = az
+        mask.data = False
+    return acc, mask
 
-def pub_waypoints(waypoints,accels):
-    wp_msg = Goals()
-    wp_pos_msg=PoseArray()
-    wp_acc_msg=AccelStamped()
-    
-    wp_msg.header.frame_id = "world"
-    # wp_msg.waypoints.header.frame_id = "world"
-    wp_pos_msg.header.frame_id = "world"
-    wp_acc_msg.header.frame_id = "world"
 
-    wp_msg.waypoints = waypoints
-    wp_pos_msg.poses = waypoints
-    if len(accels)>0:
-        wp_acc_msg.accel=accels[0]
+def create_vel(vx, vy, vz):
+    vel = Twist()
+    mask = Bool()
+    if vx is None:
+        mask.data = True
+    else:
+        vel.linear.x = vx
+        vel.linear.y = vy
+        vel.linear.z = vz
+        mask.data = False
+    return vel, mask
 
-    wp_msg.accelerations= accels
-    waypoints_pub.publish(wp_msg)
-    waypoints_pos_pub.publish(wp_pos_msg)
-    waypoints_acc_pub.publish(wp_acc_msg)
-def main():
-    rospy.init_node('mission_startup', anonymous=True)
-    rate = rospy.Rate(5) # hz 20hz
 
-    HOVER_MODE = False
-    MISSION_MODE = False
+def pub_waypoints(waypoints, accels, vels, time_factor_terminal=1.0,
+                  time_factor=0.6, max_vel=3.0, max_accel=5.0):
+    """Publish a Goals message with optional timing constraints."""
+    msg = Goals()
+    pos_msg = PoseArray()
+    acc_msg = AccelStamped()
 
+    msg.header.frame_id = 'world'
+    pos_msg.header.frame_id = 'world'
+    acc_msg.header.frame_id = 'world'
+
+    msg.waypoints = waypoints
+    msg.accelerations = [a[0] for a in accels]
+    msg.velocities = [v[0] for v in vels]
+    msg.accelerations_mask = [a[1] for a in accels]
+    msg.velocities_mask = [v[1] for v in vels]
+
+    msg.time_factor_terminal.data = time_factor_terminal
+    msg.time_factor.data = time_factor
+    msg.max_vel.data = max_vel
+    msg.max_acc.data = max_accel
+
+    pos_msg.poses = waypoints
+    if accels:
+        acc_msg.accel = accels[0][0]
+
+    waypoints_pub.publish(msg)
+    waypoints_pos_pub.publish(pos_msg)
+    waypoints_acc_pub.publish(acc_msg)
+
+
+def wait_for_state(state):
+    rate = rospy.Rate(5)
     while not rospy.is_shutdown():
         get_server_state_callback()
-
-        if check_traj_server_states("MISSION"):
-            MISSION_MODE = True
-        if check_traj_server_states("HOVER"):
-            HOVER_MODE = True
-        
-        if (MISSION_MODE):
-            # Already in MISSION 
-            # time.sleep(5)
-            break
-        elif (not HOVER_MODE):
-            # IDLE -> TAKE OFF -> HOVER
-            print("Setting to HOVER mode!")
-            publishCommand(CommanderCommand.TAKEOFF)
-        elif (HOVER_MODE):
-            # HOVER -> MISSION
-            print("Setting to MISSION mode!")
-            publishCommand(CommanderCommand.MISSION)
-
-        print("tick!")
+        if check_traj_server_states(state):
+            return
         rate.sleep()
 
-    # Send waypoints to UAVs
-    # frame is ENU
-    print(f"Sending waypoints to UAVs")
+
+def main():
+    rospy.init_node('circular_mission', anonymous=True)
+
+    rospy.loginfo('Waiting for UAV to reach HOVER')
+    publishCommand(CommanderCommand.TAKEOFF)
+    wait_for_state('HOVER')
+
+    radius = rospy.get_param('~radius', 1.0)
+    altitude = rospy.get_param('~altitude', 1.5)
+    num_points = rospy.get_param('~num_points', 100)
+
     waypoints = []
-    accel_list = []
-
-    # waypoints.append(create_pose(3.0,2.0,3.0)) # 3.0,2.0,3
-    # waypoints.append(create_pose(5.0,2.0,3.0))# 5.0,2.0,3
-    radius = 1.0
-    num_points = 100
     for i in range(num_points):
-        waypoints.append(create_pose(radius * math.cos(math.radians(i * 360 / num_points)) - radius, 
-                                     radius * math.sin(math.radians(i * 360 / num_points)),
-                                     1.5))
-        # accel_list.append(create_accel(0.0, 0.0, 0.0))  
+        theta = 2.0 * math.pi * i / num_points
+        x = radius * math.cos(theta) - radius
+        y = radius * math.sin(theta)
+        waypoints.append(create_pose(x, y, altitude))
 
-    # waypoints.append(create_pose(0, 0, 0))
-    #FOR SLOW MOTION TEST
-    # waypoints.append(create_pose(0.0,-0.5,1.0)) # 0.0,-0.5,1
-    # waypoints.append(create_pose(0.5,-0.5,1.0)) # 0.5,-0.5,1
-    # waypoints.append(create_pose(0.5,0.0,1.0)) # 0.5,0.0,1
-    # waypoints.append(create_pose(0.0,0.0,1.0)) # 0.0,0.0,1
-    
-    
-    # the number of accelerations must be equal to the number of waypoints
-    
-    # g=-9.81 #m/s^2
-    # f=0.3*(-g) #N
-    # angle=30
-    
-    # angle_rad=math.radians(angle)
+    # Close the loop by repeating the first point so the planner does not draw
+    # a chord back to the circle's centre.
+    if waypoints:
+        first = waypoints[0]
+        waypoints.append(
+            create_pose(first.position.x, first.position.y, first.position.z))
 
-    
-    # frame need to verify
-    # accel_list.append(create_accel(0.0,-f*np.sin(angle_rad),g+f*np.cos(angle_rad)))
-          
-    # accel_list.append(create_accel(0.0,0.0,0.0))
-    # accel_list.append(create_accel(0.0,0.0,0.0))
-    # accel_list.append(create_accel(0.0,0.0,0.0))
-    pub_waypoints(waypoints, accel_list)
+    velocities = []
+    accelerations = []
+    for index in range(len(waypoints)):
+        if index == 0 or index == len(waypoints) - 1:
+            velocities.append(create_vel(0.0, 0.0, 0.0))
+            accelerations.append(create_accel(0.0, 0.0, 0.0))
+        else:
+            velocities.append(create_vel(None, None, None))
+            accelerations.append(create_accel(None, None, None))
+
+    rospy.loginfo('Sending circular trajectory')
+    publishCommand(CommanderCommand.MISSION)
+    wait_for_state('MISSION')
+    pub_waypoints(waypoints, accelerations, velocities,
+                  time_factor_terminal=1.0,
+                  time_factor=0.8,
+                  max_vel=4.0,
+                  max_accel=8.0)
+    wait_for_state('HOVER')
+    rospy.loginfo('Circular trajectory complete')
+
     rospy.spin()
+
+
 if __name__ == '__main__':
     main()

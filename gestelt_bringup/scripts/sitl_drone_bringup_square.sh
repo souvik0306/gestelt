@@ -39,8 +39,8 @@ CMD_2="
 roslaunch trajectory_planner trajectory_planner_node.launch
 "
 
-# Start up script to send commands
-CMD_3="roslaunch gestelt_bringup square_mission.launch"
+# Start up mission script that publishes the circular trajectory to the planner
+CMD_3="roslaunch gestelt_bringup circular_mission.launch"
 
 if [ "$SESSIONEXISTS" = "" ]
 then
