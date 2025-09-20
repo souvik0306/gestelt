@@ -116,10 +116,21 @@ def _make_trajectory_plot(
 
     xs, ys, zs = positions.T
 
-    if times is not None and times.shape[0] == positions.shape[0]:
+    has_time_samples = (
+        times is not None
+        and times.shape[0] == positions.shape[0]
+        and times.size > 0
+    )
+
+    if has_time_samples:
+        relative_times = times - times[0]
         segments = np.stack((positions[:-1], positions[1:]), axis=1)
-        norm = Normalize(vmin=float(times.min()), vmax=float(times.max()))
-        colors = cm.viridis(norm(times[:-1]))
+        rel_time_min = float(relative_times.min())
+        rel_time_max = float(relative_times.max())
+        if rel_time_max == rel_time_min:
+            rel_time_max = rel_time_min + 1.0
+        norm = Normalize(vmin=rel_time_min, vmax=rel_time_max)
+        colors = cm.viridis(norm(relative_times[:-1]))
         collection = Line3DCollection(segments, colors=colors, linewidths=2.0)
         ax.add_collection(collection)
         cbar = fig.colorbar(cm.ScalarMappable(norm=norm, cmap="viridis"), ax=ax)
@@ -143,15 +154,32 @@ def _make_trajectory_plot(
     ax.set_title("MAVROS Local Position Trajectory")
     ax.view_init(elev=elev, azim=azim)
 
-    # Equal aspect ratio for XYZ dimensions, with margin for better visibility.
-    ranges = np.ptp(positions, axis=0)
-    max_range = np.max(ranges)
-    if max_range == 0:
-        max_range = 1.0
-    margin = 0.15 * max_range  # 15% margin
-    midpoints = np.mean(positions, axis=0)
-    for center, axis in zip(midpoints, [ax.set_xlim, ax.set_ylim, ax.set_zlim]):
-        axis(center - max_range / 2.0 - margin, center + max_range / 2.0 + margin)
+    # Equal aspect ratio for XYZ dimensions, with limits derived from
+    # min/max bounds and a modest shared margin for visibility.
+    mins = positions.min(axis=0)
+    maxs = positions.max(axis=0)
+    spans = maxs - mins
+    max_span = np.max(spans)
+    if max_span == 0:
+        max_span = 1.0
+
+    margin = 0.12 * max_span  # 12% margin based on the largest axis span
+    mins_with_margin = mins - margin
+    maxs_with_margin = maxs + margin
+    spans_with_margin = maxs_with_margin - mins_with_margin
+    target_span = np.max(spans_with_margin)
+    half_span = target_span / 2.0
+    centers = (mins + maxs) / 2.0
+
+    ax.set_xlim(centers[0] - half_span, centers[0] + half_span)
+    ax.set_ylim(centers[1] - half_span, centers[1] + half_span)
+
+    z_lower_bound = mins[2] - margin
+    if mins[2] >= 0:
+        z_lower_bound = max(z_lower_bound, 0.0)
+    z_lower = max(centers[2] - half_span, z_lower_bound)
+    z_upper = z_lower + target_span
+    ax.set_zlim(z_lower, z_upper)
 
     return fig
 
@@ -166,10 +194,16 @@ def _make_xyz_time_plot(
         print("[plot_local_position] Skipping XYZ vs time plot (timestamps missing or mismatched).")
         return
 
+    if times.size == 0:
+        print("[plot_local_position] Skipping XYZ vs time plot (no timestamp samples available).")
+        return
+
+    relative_times = times - times[0]
+
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     labels = ['X [m]', 'Y [m]', 'Z [m]']
     for i, ax in enumerate(axes):
-        ax.plot(times, positions[:, i], label=labels[i])
+        ax.plot(relative_times, positions[:, i], label=labels[i])
         ax.set_ylabel(labels[i])
         ax.grid(True)
         ax.legend(loc='best')
