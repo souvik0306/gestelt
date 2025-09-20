@@ -153,6 +153,11 @@ def _make_trajectory_plot(
     for center, axis in zip(midpoints, [ax.set_xlim, ax.set_ylim, ax.set_zlim]):
         axis(center - max_range / 2.0 - margin, center + max_range / 2.0 + margin)
 
+    # Set axis limits tightly to the data
+    ax.set_xlim(np.min(xs), np.max(xs))
+    ax.set_ylim(np.min(ys), np.max(ys))
+    ax.set_zlim(np.min(zs), np.max(zs))
+
     return fig
 
 
