@@ -133,8 +133,8 @@ def _make_trajectory_plot(
         ax.plot(xs, ys, zs, linewidth=2.0, color="#1f77b4")
 
     # Mark start (green) and end (red) points
-    ax.scatter(positions[0, 0], positions[0, 1], color='lime', s=60, label='Start', edgecolor='k', zorder=10)
-    ax.scatter(positions[-1, 0], positions[-1, 1], color='red', s=60, label='End', edgecolor='k', zorder=10)
+    ax.scatter(positions[0, 0], positions[0, 1], positions[0, 2], color='lime', s=60, label='Start', edgecolor='k', zorder=10)
+    ax.scatter(positions[-1, 0], positions[-1, 1], positions[-1, 2], color='red', s=60, label='End', edgecolor='k', zorder=10)
     ax.legend(loc="best")
 
     ax.set_xlabel("X [m]")
@@ -174,7 +174,8 @@ def _make_xyz_time_plot(
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
     labels = ['X [m]', 'Y [m]', 'Z [m]']
     for i, ax in enumerate(axes):
-        ax.plot(times, positions[:, i], label=labels[i])
+        relative_times = times - times[0]
+        ax.plot(relative_times, positions[:, i], label=labels[i])
         ax.set_ylabel(labels[i])
         ax.grid(True)
         ax.legend(loc='best')
