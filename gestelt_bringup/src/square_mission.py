@@ -122,7 +122,9 @@ def main():
     publishCommand(CommanderCommand.TAKEOFF)
     wait_for_state('HOVER')
 
-    # Define square corners at 1.2 m altitude
+    # Define square corners at 1.2 m altitude. The first waypoint matches the
+    # hover position so that the planner explicitly enforces a zero-velocity
+    # boundary condition before the vehicle leaves the origin.
     corners = [
         create_pose(0.0, 0.0, 1.2),
         create_pose(2.0, 0.0, 1.2),
@@ -131,20 +133,21 @@ def main():
         create_pose(0.0, 0.0, 1.2)
     ]
 
-    for idx, corner in enumerate(corners):
-        rospy.loginfo(f'Sending corner {idx + 1}')
-        acc = [create_accel(None, None, None)]
-        vel = [create_vel(0.0, 0.0, 0.0)]
+    # Request zero velocity at every corner so the planner produces straight
+    # edges instead of rounded turns.
+    velocities = [create_vel(0.0, 0.0, 0.0) for _ in corners]
+    accelerations = [create_accel(None, None, None) for _ in corners]
 
-        publishCommand(CommanderCommand.MISSION)
-        wait_for_state('MISSION')
-        pub_waypoints([corner], acc, vel,
-                      time_factor_terminal=1.0,
-                      time_factor=0.8,
-                      max_vel=4.0,
-                      max_accel=8.0)
-        wait_for_state('HOVER')
-        rospy.loginfo(f'Corner {idx + 1} reached')
+    rospy.loginfo('Sending full square trajectory')
+    publishCommand(CommanderCommand.MISSION)
+    wait_for_state('MISSION')
+    pub_waypoints(corners, accelerations, velocities,
+                  time_factor_terminal=1.0,
+                  time_factor=0.8,
+                  max_vel=4.0,
+                  max_accel=8.0)
+    wait_for_state('HOVER')
+    rospy.loginfo('Square trajectory complete')
 
     rospy.loginfo('Square mission complete')
     rospy.spin()
