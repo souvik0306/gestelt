@@ -1,13 +1,17 @@
 # gestelt
-A swarm-focused path planning framework. 
+
+A swarm-focused path planning framework.
 
 For simulation and deployment on a physical drone, PX4 is the firmware of choice, although it is possible to remap the topics for use with Ardupilot or any other Mavlink-compatible firmware.
 
 # Architecture
+
 <img src="docs/pictures/gestelt_architecture_24_10.png" alt="Gestelt Architecture" style="width: 1200px;"/>
 
 # Installation and Setup for Simulation
+
 1. Install dependencies
+
 ```bash
 # Install ROS (if not done)
 sudo apt install ros-noetic-desktop-full
@@ -20,6 +24,7 @@ sudo bash ./install_geographiclib_datasets.sh
 ```
 
 2. Clone repositories
+
 ```bash
 mkdir -p ~/gestelt_ws/src/
 cd ~/gestelt_ws/src
@@ -30,6 +35,7 @@ vcs import < thirdparty.repos --recursive
 ```
 
 3. Install PX4 firmware
+
 ```bash
 # cd to PX4-Autopilot repo
 cd ~/gestelt_ws/PX4-Autopilot
@@ -56,6 +62,7 @@ make distclean
 ```
 
 4. Building the workspace
+
 ```bash
 # Assuming your workspace is named as follows
 cd ~/gestelt_ws/
@@ -69,14 +76,18 @@ catkin build -DCMAKE_BUILD_TYPE=Release
 ```
 
 # Quick start
-There are 2 scripts you can use to run an example simulation. 
 
-## 1. Run PX4 SITL with Gazebo. 
+There are 2 scripts you can use to run an example simulation.
+
+## 1. Run PX4 SITL with Gazebo.
+
 The first script runs a simulated PX4 SITL instance with Gazebo, with physics. This should be tested before deployment on an actual drone. It runs the following:
+
 1. Gazebo simulation environment.
 2. Trajectory Server.
 3. Minimum Snap Trajectory Planner and Sampler.
 4. Mission commands.
+
 ```bash
 cd ~/gestelt_ws/src/gestelt/gestelt_bringup/scripts
 # Run the script, the script sources all the relevant workspaces so you don't have to worry about sourcing. 
@@ -88,26 +99,31 @@ killall -9 gazebo; killall -9 gzserver; killall -9 gzclient; killall -9 rosmaste
 # IF you want to add a shortcut to kill the simulation you can add the following to ~/.bashrc
 alias killbill="killall -9 gazebo; killall -9 gzserver; killall -9 gzclient; killall -9 rosmaster; tmux kill-server;
 ```
+
 5. If you want to change the planning setpoints:
+
 - The mission source code is in [mission.py](gestelt_bringup/src/mission.py)
-    - Here, the quadrotor is commanded to take off, enter mission mode and are given goal points.
+  - Here, the quadrotor is commanded to take off, enter mission mode and are given goal points.
 - The trajectory planner source code is in [example_planner.cc](trajectory_planner/src/example_planner.cc)
-    - Here, given a goal point, a minimum snap trajectory is planned
+  - Here, given a goal point, a minimum snap trajectory is planned
 - The trajectory sampler source code is in [trajectory_sampler.cpp](trajectory_planner/src/trajectory_sampler.cpp)
-    - Here, given a minimum snap trajectory, the points are sampled and sent to the Trajectory server.
+  - Here, given a minimum snap trajectory, the points are sampled and sent to the Trajectory server.
 - The trajectory execution source code is in [traj_server.cpp](trajectory_server/src/traj_server.cpp)
-    - Here, each individual setpoint is converted to PVA commands and sent to the quadrotor.
-    - The function in charge of converting the minimum snap point to PVA point is `void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointTrajectory::ConstPtr &msg)`
+  - Here, each individual setpoint is converted to PVA commands and sent to the quadrotor.
+  - The function in charge of converting the minimum snap point to PVA point is `void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointTrajectory::ConstPtr &msg)`
 - Refer to the architecture above for more information on how they are connected.
 
 ## 2. Run a fake physics-less drone simulation
+
 The second one is a fake drone with no physics and be used to test the architecture or algorithm. It runs the following:
+
 1. Fake drone simulation.
 2. Trajectory Server.
 3. Minimum Snap Trajectory Planner and Sampler.
 4. Mission commands.
 
 ## Recording and plotting MAVROS local position data
+
 When you launch the SITL bringup via `sitl_drone_bringup.sh`, the `local_position_logger`
 node records `/mavros/local_position/pose` samples into NumPy arrays under
 `~/gestelt_ws/collected_poses/` by default (`timestamps.npy` and `positions.npy`).
@@ -115,15 +131,16 @@ node records `/mavros/local_position/pose` samples into NumPy arrays under
 You can convert those arrays into a 3D plot with:
 
 ```bash
-python3 ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/scripts/plot_local_position.py \
-  --positions ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/positions.npy \
-  --timestamps ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/timestamps.npy \
-  --output ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/collected_poses/trajectory.png
+python3 ~/Downloads/gestelt_ws/src/gestelt/gestelt_bringup/scripts/plot_local_position.py   
+--positions ~/gestelt_ws/collected_poses/positions.npy 
+--timestamps ~/gestelt_ws/collected_poses/timestamps.npy 
+--output ~/gestelt_ws/collected_poses/trajectory.png
 ```
 
 Use `--show` to open an interactive window or `--help` for additional options such as custom input paths and camera
 angles.
 
 # Acknowledgements
+
 1. [EGO-Planner-V2 repo](https://github.com/ZJU-FAST-Lab/EGO-Planner-v2)
 2. [ETHZ-ASL/mav_trajectory_generation](https://github.com/ethz-asl/mav_trajectory_generation)
