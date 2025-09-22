@@ -51,6 +51,8 @@ cd gestelt_bringup/scripts
 ```bash
 source /opt/ros/noetic/setup.bash
 roslaunch mavros px4.launch fcu_url:="udp://:14540@localhost:14557"
+
+roslaunch mavros px4.launch hil:=true fcu_url:="udp://:14540@localhost:14580" fcu_protocol:=v2.0 _fcu_protocol:=v2.0
 ```
 
 Wait for output similar to:
