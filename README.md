@@ -92,6 +92,28 @@ catkin build
 catkin build -DCMAKE_BUILD_TYPE=Release
 ```
 
+### Persistent acados environment setup
+
+The `mpc_ros_wrapper` package expects the acados installation to be discoverable at login. Add the following block to the end of your `~/.bashrc` (it is already present on development machines):
+
+```bash
+if [ -d "$HOME/acados" ]; then
+  export ACADOS_SOURCE_DIR="${ACADOS_SOURCE_DIR:-$HOME/acados}"
+  case ":$LD_LIBRARY_PATH:" in
+    *":$ACADOS_SOURCE_DIR/lib:"*) ;;
+    *) export LD_LIBRARY_PATH="$ACADOS_SOURCE_DIR/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  esac
+  case ":$CMAKE_PREFIX_PATH:" in
+    *":$ACADOS_SOURCE_DIR:"*) ;;
+    *) export CMAKE_PREFIX_PATH="$ACADOS_SOURCE_DIR${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" ;;
+  esac
+fi
+```
+
+- Adjust `$HOME/acados` if your acados install lives elsewhere.
+- Re-open your terminal or run `source ~/.bashrc` before building to refresh the environment.
+- After the environment is loaded you can run `catkin build mpc_ros_wrapper` without extra exports.
+
 # Quick start
 
 There are 2 scripts you can use to run an example simulation. 
