@@ -11,7 +11,7 @@ import sys
 
 # --- configuration ---
 WINDOW_SIZE = 100    # Number of IMU samples per inference window (0.5s at 200Hz)
-STEP_SIZE = 3        # Number of new samples between inferences (15ms at 200Hz)
+STEP_SIZE = 2        # Number of new samples between inferences (10ms at 200Hz)
 BUFFER_SIZE = 400    # Big enough to always hold at least one window + margin
 
 class IMUBuffer:
@@ -24,6 +24,7 @@ class IMUBuffer:
         self.acc_buf  = np.zeros((self.buffer_size, 3), dtype=np.float32)
         self.gyro_buf = np.zeros((self.buffer_size, 3), dtype=np.float32)
         self.buf_idx = 0
+        self.new_samples_since_last_inference = 0
 
     def add(self, msg: Imu):
         if self.buf_idx >= self.buffer_size:
@@ -45,10 +46,15 @@ class IMUBuffer:
             msg.angular_velocity.z
         ]
         self.buf_idx += 1
+        self.new_samples_since_last_inference += 1
 
     def ready(self):
         """Check if enough samples are collected for inference."""
         return self.buf_idx >= self.window_size
+
+    def should_infer(self):
+        """Trigger inference every STEP_SIZE new samples, after at least window_size samples are available."""
+        return self.ready() and self.new_samples_since_last_inference >= self.step_size
 
     def get_window(self):
         """Get the current window of buffered IMU data (last window_size samples)."""
@@ -67,6 +73,7 @@ class IMUBuffer:
             self.acc_buf[:leftover]  = self.acc_buf[self.buf_idx - leftover:self.buf_idx]
             self.gyro_buf[:leftover] = self.gyro_buf[self.buf_idx - leftover:self.buf_idx]
             self.buf_idx = leftover
+            self.new_samples_since_last_inference = 0
 
 class CorrectedIMUPublisher:
     """Publishes corrected IMU messages to a ROS topic."""
@@ -169,7 +176,7 @@ class IMUInferenceNode:
 
     def imu_callback(self, msg: Imu):
         self.buffer.add(msg)
-        if self.buffer.ready() and (self.buffer.buf_idx % STEP_SIZE == 0):
+        if self.buffer.should_infer():
             self.run_inference()
             self.buffer.slide_window()
 
