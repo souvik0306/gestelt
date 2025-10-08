@@ -10,70 +10,48 @@ from std_msgs.msg import Header
 import sys
 
 # --- configuration ---
-WINDOW_SIZE = 100    # Number of IMU samples per inference window (0.5s at 200Hz)
-STEP_SIZE = 2        # Number of new samples between inferences (10ms at 200Hz)
-BUFFER_SIZE = 400    # Big enough to always hold at least one window + margin
+SEQLEN   = 50        # Number of IMU samples per inference window
+INTERVAL = 9          # Interval between inference windows
+OVERLAP  = INTERVAL + 1  # Number of samples kept between windows for overlap
 
 class IMUBuffer:
     """Buffer for storing IMU data and managing inference windows."""
-    def __init__(self, window_size, step_size, buffer_size):
-        self.window_size = window_size
-        self.step_size = step_size
-        self.buffer_size = buffer_size
-        self.time_buf = np.zeros(self.buffer_size, dtype=np.float32)
-        self.acc_buf  = np.zeros((self.buffer_size, 3), dtype=np.float32)
-        self.gyro_buf = np.zeros((self.buffer_size, 3), dtype=np.float32)
+    def __init__(self, seqlen, overlap):
+        self.max_size = seqlen * 2
+        self.seqlen = seqlen
+        self.overlap = overlap
+        self.time_buf = np.zeros(self.max_size, dtype=np.float32)
+        self.acc_buf  = np.zeros((self.max_size, 3), dtype=np.float32)
+        self.gyro_buf = np.zeros((self.max_size, 3), dtype=np.float32)
         self.buf_idx = 0
-        self.new_samples_since_last_inference = 0
 
     def add(self, msg: Imu):
-        if self.buf_idx >= self.buffer_size:
-            # Shift left to make room (could use deque for more efficiency)
-            shift = self.buf_idx - self.window_size + self.step_size
-            self.time_buf[:-shift] = self.time_buf[shift:]
-            self.acc_buf[:-shift]  = self.acc_buf[shift:]
-            self.gyro_buf[:-shift] = self.gyro_buf[shift:]
-            self.buf_idx -= shift
         self.time_buf[self.buf_idx] = msg.header.stamp.to_sec()
-        self.acc_buf[self.buf_idx]  = [
-            msg.linear_acceleration.x,
-            msg.linear_acceleration.y,
-            msg.linear_acceleration.z
-        ]
-        self.gyro_buf[self.buf_idx] = [
-            msg.angular_velocity.x,
-            msg.angular_velocity.y,
-            msg.angular_velocity.z
-        ]
+        self.acc_buf[self.buf_idx]  = [msg.linear_acceleration.x,
+                                       msg.linear_acceleration.y,
+                                       msg.linear_acceleration.z]
+        self.gyro_buf[self.buf_idx] = [msg.angular_velocity.x,
+                                       msg.angular_velocity.y,
+                                       msg.angular_velocity.z]
         self.buf_idx += 1
-        self.new_samples_since_last_inference += 1
 
     def ready(self):
         """Check if enough samples are collected for inference."""
-        return self.buf_idx >= self.window_size
-
-    def should_infer(self):
-        """Trigger inference every STEP_SIZE new samples, after at least window_size samples are available."""
-        return self.ready() and self.new_samples_since_last_inference >= self.step_size
+        return self.buf_idx >= self.seqlen
 
     def get_window(self):
-        """Get the current window of buffered IMU data (last window_size samples)."""
-        start = self.buf_idx - self.window_size
-        end = self.buf_idx
-        return (self.time_buf[start:end],
-                self.acc_buf[start:end],
-                self.gyro_buf[start:end])
+        """Get the current window of buffered IMU data."""
+        return (self.time_buf[:self.buf_idx],
+                self.acc_buf[:self.buf_idx],
+                self.gyro_buf[:self.buf_idx])
 
     def slide_window(self):
-        """After inference, slide buffer by step_size (keep last window_size - step_size samples)."""
-        if self.buf_idx >= self.window_size:
-            leftover = self.window_size - self.step_size
-            # Move the last leftover samples to the beginning
-            self.time_buf[:leftover] = self.time_buf[self.buf_idx - leftover:self.buf_idx]
-            self.acc_buf[:leftover]  = self.acc_buf[self.buf_idx - leftover:self.buf_idx]
-            self.gyro_buf[:leftover] = self.gyro_buf[self.buf_idx - leftover:self.buf_idx]
-            self.buf_idx = leftover
-            self.new_samples_since_last_inference = 0
+        """Keep only the last overlap samples after inference."""
+        # Keep last overlap samples
+        self.time_buf[:self.overlap] = self.time_buf[self.buf_idx - self.overlap : self.buf_idx]
+        self.acc_buf[:self.overlap]  = self.acc_buf[self.buf_idx - self.overlap : self.buf_idx]
+        self.gyro_buf[:self.overlap] = self.gyro_buf[self.buf_idx - self.overlap : self.buf_idx]
+        self.buf_idx = self.overlap
 
 class CorrectedIMUPublisher:
     """Publishes corrected IMU messages to a ROS topic."""
@@ -82,14 +60,21 @@ class CorrectedIMUPublisher:
 
     def publish(self, corrected_acc, corrected_gyro):
         imu_msg = Imu()
+
+        # timestamp
         imu_msg.header.stamp = rospy.Time.now()
         imu_msg.header.frame_id = "imu_link"
+
+        # Corrected acceleration
         imu_msg.linear_acceleration.x = float(corrected_acc[0])
         imu_msg.linear_acceleration.y = float(corrected_acc[1])
         imu_msg.linear_acceleration.z = float(corrected_acc[2])
+
+        # Corrected gyroscope
         imu_msg.angular_velocity.x = float(corrected_gyro[0])
         imu_msg.angular_velocity.y = float(corrected_gyro[1])
         imu_msg.angular_velocity.z = float(corrected_gyro[2])
+
         self.pub.publish(imu_msg)
 
 class IMUInferenceNode:
@@ -99,7 +84,7 @@ class IMUInferenceNode:
         self.pkg_path = rp.get_path("imu_listener_pkg")
         self.onnx_path   = os.path.join(self.pkg_path, "models", "airimu_euroc.onnx")
         self.pickle_path = os.path.join(self.pkg_path, "results", "timeit_sim_new_net_output.pickle")
-        self.buffer = IMUBuffer(WINDOW_SIZE, STEP_SIZE, BUFFER_SIZE)
+        self.buffer = IMUBuffer(SEQLEN, OVERLAP)
         self.results = []
         self.correction_counter = 0
         self.onnx_model = None
@@ -145,10 +130,9 @@ class IMUInferenceNode:
             gyro_b = gyro[None, ...]
             corr_acc, corr_gyro = self.onnx_model.run(None, {"acc": acc_b, "gyro": gyro_b})
 
-            # Only the last STEP_SIZE samples are new
-            start = len(acc) - STEP_SIZE
-            corrected_acc  = acc_b[:, start:, :]  + corr_acc[:, start:, :]
-            corrected_gyro = gyro_b[:, start:, :] + corr_gyro[:, start:, :]
+            start = OVERLAP - 1
+            corrected_acc  = acc_b[:, start:, :]  + corr_acc
+            corrected_gyro = gyro_b[:, start:, :] + corr_gyro
             dt_trim        = dt[start:, :]
 
             self.correction_counter += 1
@@ -163,8 +147,8 @@ class IMUInferenceNode:
             )
 
             self.results.append({
-                "correction_acc":  corr_acc[0, start:],
-                "correction_gyro": corr_gyro[0, start:],
+                "correction_acc":  corr_acc[0],
+                "correction_gyro": corr_gyro[0],
                 "corrected_acc":   corrected_acc[0],
                 "corrected_gyro":  corrected_gyro[0],
                 "dt":              dt_trim,
@@ -176,7 +160,7 @@ class IMUInferenceNode:
 
     def imu_callback(self, msg: Imu):
         self.buffer.add(msg)
-        if self.buffer.should_infer():
+        if self.buffer.ready():
             self.run_inference()
             self.buffer.slide_window()
 
@@ -191,6 +175,8 @@ class IMUInferenceNode:
 
         self.load_model()
         rospy.Subscriber("/imu_data", Imu, self.imu_callback, queue_size=1000)
+        # rospy.Subscriber("/snappy_imu", Imu, self.imu_callback, queue_size=1000)
+        # rospy.Subscriber("mavros/imu/data", Imu, self.imu_callback, queue_size=1000)
         rospy.spin()
 
 if __name__ == "__main__":
