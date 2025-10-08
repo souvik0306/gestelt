@@ -10,8 +10,13 @@ from sensor_msgs.msg import Imu
 import sys
 
 # --- configuration ---
-WINDOW_SIZE = 100  # Number of IMU samples per inference window
+WINDOW_SIZE = 100  # Number of IMU samples collected before triggering inference
 STEP_SIZE   = 2    # Number of samples the sliding window advances between inferences
+# The ONNX network was trained on sequences of 50 IMU samples, which become 49
+# time-aligned feature rows once the trailing delta is removed.  We keep a
+# longer window in the buffer for robustness, but only the most recent
+# MODEL_SEQUENCE_LENGTH samples are fed to the model at every inference.
+MODEL_SEQUENCE_LENGTH = 49
 
 class IMUBuffer:
     """Buffer for storing IMU data and managing inference windows."""
@@ -106,6 +111,7 @@ class IMUInferenceNode:
         self.correction_counter = 0
         self.onnx_model = None
         self.corrected_imu_pub = CorrectedIMUPublisher("/corrected_imu")
+        self.model_sequence_length = MODEL_SEQUENCE_LENGTH
 
     def check_files(self):
         if not os.path.isfile(self.onnx_path):
@@ -123,7 +129,11 @@ class IMUInferenceNode:
             self.onnx_model = ort.InferenceSession(
                 self.onnx_path, sess_options=session_options, providers=["CPUExecutionProvider"]
             )
-            rospy.loginfo(f"[READY] Model loaded at ROS time: {rospy.Time.now().to_sec():.2f}")
+            self._configure_model_sequence_length()
+            rospy.loginfo(
+                f"[READY] Model loaded at ROS time: {rospy.Time.now().to_sec():.2f}; "
+                f"model sequence length: {self.model_sequence_length}"
+            )
         except Exception as e:
             rospy.logerr(f"Failed to load ONNX model: {e}")
             rospy.signal_shutdown("Fatal error: Model loading failed.")
@@ -136,6 +146,53 @@ class IMUInferenceNode:
                 pickle.dump(self.results, f, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception as e:
             rospy.logerr(f"Failed to save results: {e}")
+
+    def _configure_model_sequence_length(self):
+        """Use ONNX metadata to refine the expected sequence length."""
+
+        if self.onnx_model is None:
+            return
+
+        inferred_length = None
+
+        try:
+            for input_meta in self.onnx_model.get_inputs():
+                # Expecting tensors shaped as (batch, sequence, features)
+                if len(input_meta.shape) >= 3:
+                    seq_dim = input_meta.shape[1]
+                    if isinstance(seq_dim, int) and seq_dim > 0:
+                        inferred_length = seq_dim
+                        break
+
+            if inferred_length is not None:
+                # The network consumes fixed-length sequences; clamp the metadata to
+                # the available buffer so we never overrun the configured window.
+                inferred_length = int(inferred_length)
+                inferred_length = min(inferred_length, WINDOW_SIZE - 1)
+                if inferred_length <= 0:
+                    raise ValueError("Model sequence length inferred as non-positive")
+                self.model_sequence_length = inferred_length
+            else:
+                rospy.logwarn(
+                    "Unable to infer model sequence length from ONNX metadata; "
+                    f"using configured default of {self.model_sequence_length}."
+                )
+        except Exception as exc:
+            rospy.logwarn(
+                "Failed to determine model sequence length from ONNX metadata: %s. "
+                "Using default value %d.",
+                exc,
+                self.model_sequence_length,
+            )
+
+        # Ensure we always keep at least one sample for dt calculation.
+        if self.model_sequence_length >= WINDOW_SIZE:
+            rospy.logwarn(
+                "Model sequence length %d exceeds available window. Clamping to %d.",
+                self.model_sequence_length,
+                WINDOW_SIZE - 1,
+            )
+            self.model_sequence_length = WINDOW_SIZE - 1
 
     def run_inference(self):
         try:
@@ -160,13 +217,33 @@ class IMUInferenceNode:
             if acc.shape[1] != 3:
                 raise ValueError(f"Expected IMU vectors of length 3, got {acc.shape[1]}")
 
-            dt = np.diff(time, prepend=time[0])[..., None]
-            dt = dt[1:, :]  # drop the artificial first element
+            required_samples = self.model_sequence_length + 1
+            if time.shape[0] < required_samples:
+                raise ValueError(
+                    "Not enough samples for model inference: "
+                    f"have {time.shape[0]}, require {required_samples}"
+                )
+
+            if time.shape[0] > required_samples:
+                # Retain only the most recent samples needed by the model.
+                start = time.shape[0] - required_samples
+                time = time[start:]
+                acc = acc[start:]
+                gyro = gyro[start:]
+
+            dt = np.diff(time)[..., None]
+            dt = dt.astype(np.float32, copy=False)
             acc = acc[:-1]
             gyro = gyro[:-1]
 
-            acc_b = acc[None, ...]
-            gyro_b = gyro[None, ...]
+            acc_b = acc.astype(np.float32, copy=False)[None, ...]
+            gyro_b = gyro.astype(np.float32, copy=False)[None, ...]
+
+            if acc_b.shape[1] != self.model_sequence_length or gyro_b.shape[1] != self.model_sequence_length:
+                raise ValueError(
+                    "Prepared sequence length does not match model expectation: "
+                    f"acc {acc_b.shape[1]}, gyro {gyro_b.shape[1]}, expected {self.model_sequence_length}"
+                )
 
             corr_acc, corr_gyro = self.onnx_model.run(None, {"acc": acc_b, "gyro": gyro_b})
 
