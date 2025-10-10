@@ -77,50 +77,6 @@ class CorrectedIMUPublisher:
 
         self.pub.publish(imu_msg)
 
-
-class HilSensorPublisher:
-    """Publishes corrected IMU data as MAVROS HilSensor messages."""
-
-    # Bit mask for accel (bits 0-2) and gyro (bits 3-5) updates in MAVLink HIL_SENSOR.
-    FIELDS_UPDATED_ACCEL_GYRO = (
-        (1 << 0)
-        | (1 << 1)
-        | (1 << 2)
-        | (1 << 3)
-        | (1 << 4)
-        | (1 << 5)
-    )
-
-    def __init__(self, topic_name="/mavros/hil/imu_ned"):
-        self.pub = rospy.Publisher(topic_name, HilSensor, queue_size=100)
-
-    def publish(self, corrected_acc, corrected_gyro, stamp):
-        hil_msg = HilSensor()
-
-        hil_msg.header.stamp = stamp
-        hil_msg.header.frame_id = "imu_link"
-
-        hil_msg.acc.x = float(corrected_acc[0])
-        hil_msg.acc.y = float(corrected_acc[1])
-        hil_msg.acc.z = float(corrected_acc[2])
-
-        hil_msg.gyro.x = float(corrected_gyro[0])
-        hil_msg.gyro.y = float(corrected_gyro[1])
-        hil_msg.gyro.z = float(corrected_gyro[2])
-
-        # No magnetometer correction available yet; publish zeros in body frame.
-        hil_msg.mag.x = 0.0
-        hil_msg.mag.y = 0.0
-        hil_msg.mag.z = 0.0
-
-        hil_msg.abs_pressure = 0.0
-        hil_msg.diff_pressure = 0.0
-        hil_msg.pressure_alt = 0.0
-        hil_msg.temperature = 0.0
-        hil_msg.fields_updated = self.FIELDS_UPDATED_ACCEL_GYRO
-
-        self.pub.publish(hil_msg)
-
 class IMUInferenceNode:
     """Main node for IMU inference and publishing corrected data."""
     def __init__(self):
@@ -133,7 +89,6 @@ class IMUInferenceNode:
         self.correction_counter = 0
         self.onnx_model = None
         self.corrected_imu_pub = CorrectedIMUPublisher("/corrected_imu")
-        self.hil_sensor_pub = HilSensorPublisher("/mavros/hil/imu_ned")
 
     def check_files(self):
         if not os.path.isfile(self.onnx_path):
@@ -187,12 +142,8 @@ class IMUInferenceNode:
             rospy.loginfo("-----------------------")
 
             # Publish the last corrected IMU message
-            stamp = rospy.Time.now()
             self.corrected_imu_pub.publish(
-                corrected_acc[0, -1], corrected_gyro[0, -1], stamp
-            )
-            self.hil_sensor_pub.publish(
-                corrected_acc[0, -1], corrected_gyro[0, -1], stamp
+               corrected_acc[0, -1], corrected_gyro[0, -1]
             )
 
             self.results.append({

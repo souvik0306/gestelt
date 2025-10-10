@@ -4,8 +4,13 @@
   <node pkg="rosbag" type="play" name="rosbag_play" args="$(find imu_listener_pkg)/bags/MH_05_difficult.bag" />
   -->
 
+  <!-- Launch MAVROS with PX4 SITL connection -->
+  <include file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
+  </include>
+
   <!-- Start your IMU inference node --> 
-  <node pkg="imu_listener_pkg" type="imu_listener.py" name="imu_node" output="screen">
+  <node pkg="imu_listener_pkg" type="fake_imu_1.py" name="imu_node" output="screen">
     <remap from="/imu_data" to="/mavros/imu/data"/> 
   </node>
 </launch>
