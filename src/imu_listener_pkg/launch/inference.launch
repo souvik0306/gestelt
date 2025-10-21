@@ -10,7 +10,7 @@
   </include>
 
   <!-- Start your IMU inference node --> 
-  <node pkg="imu_listener_pkg" type="fake_imu_1.py" name="imu_node" output="screen">
+  <node pkg="imu_listener_pkg" type="fake_imu_1_mavros.py" name="imu_node" output="screen">
     <remap from="/imu_data" to="/mavros/imu/data"/> 
   </node>
 </launch>
