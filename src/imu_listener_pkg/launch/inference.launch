@@ -1,16 +1,34 @@
 <launch>
-  <!-- Optional: Play rosbag (disabled by default) -->
-  <!--
-  <node pkg="rosbag" type="play" name="rosbag_play" args="$(find imu_listener_pkg)/bags/MH_05_difficult.bag" />
+  <!-- 
+    IMU Inference Launch File
+    
+    Usage modes:
+    1. Rosbag playback: Uncomment the rosbag node below
+       - Publishes to /imu0 topic
+    2. Live MAVROS data: Uncomment the MAVROS include
+       - Publishes to /mavros/imu/data topic
+    3. Custom IMU source: Set the imu_topic argument
   -->
+  
+  <!-- Argument for IMU source topic (can be overridden) -->
+  <arg name="imu_topic" default="/imu0" />
+  <arg name="use_rosbag" default="true" />
+  <arg name="use_mavros" default="false" />
+  <arg name="bag_file" default="$(find imu_listener_pkg)/bags/MH_02_easy.bag" />
+  
+  <!-- Option 1: Play rosbag (publishes to /imu0) -->
+  <node if="$(arg use_rosbag)" pkg="rosbag" type="play" name="rosbag_play" 
+        args="--clock $(arg bag_file)" output="screen" />
 
-  <!-- Launch MAVROS with PX4 SITL connection -->
-  <include file="$(find mavros)/launch/px4.launch">
+  <!-- Option 2: Launch MAVROS with PX4 SITL connection (publishes to /mavros/imu/data) -->
+  <include if="$(arg use_mavros)" file="$(find mavros)/launch/px4.launch">
     <arg name="fcu_url" value="udp://:14540@localhost:14557"/>
   </include>
 
-  <!-- Start your IMU inference node --> 
-  <node pkg="imu_listener_pkg" type="fake_imu_1_mavros.py" name="imu_node" output="screen">
-    <remap from="/imu_data" to="/mavros/imu/data"/> 
+  <!-- IMU Inference Node -->
+  <node pkg="imu_listener_pkg" type="inference_ros.py" name="imu_inference_node" output="screen">
+    <!-- Remap: inference node subscribes to /imu_data internally, 
+         but we remap it to the actual IMU source topic -->
+    <remap from="/imu_data" to="$(arg imu_topic)" /> 
   </node>
 </launch>
