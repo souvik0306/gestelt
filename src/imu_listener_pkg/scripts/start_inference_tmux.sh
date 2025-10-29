@@ -54,6 +54,13 @@ fi
 # Kill existing session
 tmux has-session -t $SESSION_NAME 2>/dev/null && tmux kill-session -t $SESSION_NAME
 
+# Clean up any existing ROS processes
+echo "Cleaning up existing ROS processes..."
+pkill -9 roscore 2>/dev/null || true
+pkill -9 rosmaster 2>/dev/null || true
+pkill -9 rosout 2>/dev/null || true
+sleep 1
+
 # Display config
 echo "=================================================="
 echo "  IMU Inference Pipeline"
