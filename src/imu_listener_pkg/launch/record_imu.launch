@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 
+    IMU Recording Launch File
+    
+    Records both raw and AI-corrected IMU data to a rosbag.
+    The AI client must be running (launched separately or via tmux script).
+    
+    Usage:
+      roslaunch imu_listener_pkg record_imu.launch
+      
+    Output:
+      Rosbag saved to: imu_listener_pkg/bags/imu_comparison_<timestamp>.bag
+      
+    Topics recorded:
+      - /imu/raw: Raw IMU data from PX4
+      - /imu/corrected: AI-corrected IMU data
+      - /mavros/imu/data: MAVROS IMU data (for reference)
+      - /mavros/local_position/pose: Position data
+      - /mavros/state: Flight state
+  -->
+  
+  <arg name="bag_dir" default="$(find imu_listener_pkg)/bags" />
+  <arg name="bag_name" default="imu_comparison" />
+  
+  <!-- Record IMU topics -->
+  <node pkg="rosbag" type="record" name="imu_recorder" output="screen"
+        args="-o $(arg bag_dir)/$(arg bag_name)
+              /imu/raw
+              /imu/corrected
+              /mavros/imu/data
+              /mavros/local_position/pose
+              /mavros/state
+              /clock" />
+</launch>

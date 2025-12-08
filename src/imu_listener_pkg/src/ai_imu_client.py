@@ -25,6 +25,10 @@ import numpy as np
 from collections import deque
 from typing import Optional, Tuple
 
+# ROS imports
+import rospy
+from sensor_msgs.msg import Imu
+
 # Import the inference module
 from realtime_imu_inference import RealtimeIMUInference
 
@@ -82,6 +86,17 @@ class AIClient:
 
     def __init__(self):
         self.running = False
+
+        # Initialize ROS node
+        rospy.init_node('ai_imu_client', anonymous=True, disable_signals=True)
+        
+        # ROS Publishers for raw and corrected IMU data
+        self.pub_raw_imu = rospy.Publisher('/imu/raw', Imu, queue_size=100)
+        self.pub_corrected_imu = rospy.Publisher('/imu/corrected', Imu, queue_size=100)
+        
+        rospy.loginfo("ROS Publishers initialized:")
+        rospy.loginfo("  - Raw IMU: /imu/raw")
+        rospy.loginfo("  - Corrected IMU: /imu/corrected")
 
         # TCP sockets
         self.rx_socket: Optional[socket.socket] = None
@@ -265,6 +280,9 @@ class AIClient:
                     if self.stats['samples_received'] <= 4:
                         print(f"RX Sample {self.stats['samples_received']}: {sample}")
 
+                    # Publish raw IMU data to ROS
+                    self.publish_raw_imu(sample)
+
                     # Add to processing queue
                     self.process_queue.append(sample)
 
@@ -277,6 +295,48 @@ class AIClient:
             self.disconnect()
 
         return samples_received
+
+    def publish_raw_imu(self, sample: ImuSample):
+        """Publish raw IMU data to ROS topic"""
+        try:
+            imu_msg = Imu()
+            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
+            imu_msg.header.frame_id = "imu_raw"
+            
+            # Angular velocity (gyro)
+            imu_msg.angular_velocity.x = sample.gyro_x
+            imu_msg.angular_velocity.y = sample.gyro_y
+            imu_msg.angular_velocity.z = sample.gyro_z
+            
+            # Linear acceleration
+            imu_msg.linear_acceleration.x = sample.accel_x
+            imu_msg.linear_acceleration.y = sample.accel_y
+            imu_msg.linear_acceleration.z = sample.accel_z
+            
+            self.pub_raw_imu.publish(imu_msg)
+        except Exception as e:
+            rospy.logwarn(f"Failed to publish raw IMU: {e}")
+
+    def publish_corrected_imu(self, sample: ImuSample):
+        """Publish corrected IMU data to ROS topic"""
+        try:
+            imu_msg = Imu()
+            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
+            imu_msg.header.frame_id = "imu_corrected"
+            
+            # Angular velocity (gyro)
+            imu_msg.angular_velocity.x = sample.gyro_x
+            imu_msg.angular_velocity.y = sample.gyro_y
+            imu_msg.angular_velocity.z = sample.gyro_z
+            
+            # Linear acceleration
+            imu_msg.linear_acceleration.x = sample.accel_x
+            imu_msg.linear_acceleration.y = sample.accel_y
+            imu_msg.linear_acceleration.z = sample.accel_z
+            
+            self.pub_corrected_imu.publish(imu_msg)
+        except Exception as e:
+            rospy.logwarn(f"Failed to publish corrected IMU: {e}")
 
     def process_sample(self, sample: ImuSample) -> ImuSample:
         """
@@ -401,6 +461,9 @@ class AIClient:
 
             # AI processing
             processed_sample = self.process_sample(sample)
+
+            # Publish corrected IMU data to ROS
+            self.publish_corrected_imu(processed_sample)
 
             # Send back to PX4
             if self.send_sample(processed_sample):
