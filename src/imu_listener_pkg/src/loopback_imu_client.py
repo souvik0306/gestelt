@@ -5,7 +5,7 @@ AI IMU Subscriber and Feedback Client for PX4 TCP Pipeline
 This script:
 1. Connects to PX4 TCP publisher on port 14567
 2. Receives IMU samples from PX4
-3. Performs AI preprocessing/processing with ONNX model
+3. Performs AI preprocessing/processing
 4. Sends processed samples back to PX4 on port 14568
 
 Architecture:
@@ -20,17 +20,8 @@ import struct
 import time
 import signal
 import sys
-import os
-import numpy as np
 from collections import deque
 from typing import Optional, Tuple
-
-# ROS imports
-import rospy
-from sensor_msgs.msg import Imu
-
-# Import the inference module
-from realtime_imu_inference import RealtimeIMUInference
 
 # Packet format: matches ImuUdpPacket structure in PX4
 # uint64_t timestamp_us      (8 bytes)
@@ -87,17 +78,6 @@ class AIClient:
     def __init__(self):
         self.running = False
 
-        # Initialize ROS node
-        rospy.init_node('ai_imu_client', anonymous=True, disable_signals=True)
-        
-        # ROS Publishers for raw and corrected IMU data
-        self.pub_raw_imu = rospy.Publisher('/imu/raw', Imu, queue_size=100)
-        self.pub_corrected_imu = rospy.Publisher('/imu/corrected', Imu, queue_size=100)
-        
-        rospy.loginfo("ROS Publishers initialized:")
-        rospy.loginfo("  - Raw IMU: /imu/raw")
-        rospy.loginfo("  - Corrected IMU: /imu/corrected")
-
         # TCP sockets
         self.rx_socket: Optional[socket.socket] = None
         self.tx_socket: Optional[socket.socket] = None
@@ -111,44 +91,16 @@ class AIClient:
             'tx_errors': 0,
             'crc_failures': 0,
             'sequence_gaps': 0,
-            'corrupted_outputs': 0,  # Track NaN/Inf from model
             'last_sequence': None,
             'start_time': None,
             'last_stats_time': None,
-            # For instantaneous rate calculation
-            'last_samples_received': 0,
-            'last_samples_processed': 0,
-            'last_samples_sent': 0,
         }
 
         # Processing queue
-        self.process_queue = deque(maxlen=1000)
+        self.process_queue = deque(maxlen=256)
 
         # Sample buffer for TCP recv
         self.rx_buffer = b''
-
-        # Get model path (use INT8 optimized model)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        pkg_path = os.path.dirname(script_dir)  # imu_listener_pkg root
-        
-        # Try INT8 model first, fall back to FP32 if not available
-        model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_new.onnx")
-        # fp32_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32.onnx")
-        
-        # if os.path.isfile(int8_model_path):
-        #     model_path = int8_model_path
-        #     print(f"Using INT8 quantized model: {model_path}")
-        # elif os.path.isfile(fp32_model_path):
-        #     model_path = fp32_model_path
-        #     print(f"INT8 model not found, using FP32 model: {model_path}")
-        # else:
-        #     raise FileNotFoundError(f"No model found at {int8_model_path} or {fp32_model_path}")
-
-        # Initialize inference module (INT8 handled automatically)
-        self.inference = RealtimeIMUInference(
-            model_path, 
-            verbose=False
-        )
 
     def calculate_crc16(self, data: bytes) -> int:
         """Calculate CRC16-CCITT"""
@@ -229,11 +181,6 @@ class AIClient:
         if self.tx_socket:
             self.tx_socket.close()
             self.tx_socket = None
-
-        # Close inference module
-        if hasattr(self, 'inference'):
-            self.inference.close()
-
         print("Disconnected from PX4")
 
     def receive_samples(self) -> int:
@@ -284,9 +231,6 @@ class AIClient:
                     if self.stats['samples_received'] <= 4:
                         print(f"RX Sample {self.stats['samples_received']}: {sample}")
 
-                    # Publish raw IMU data to ROS
-                    self.publish_raw_imu(sample)
-
                     # Add to processing queue
                     self.process_queue.append(sample)
 
@@ -300,108 +244,30 @@ class AIClient:
 
         return samples_received
 
-    def publish_raw_imu(self, sample: ImuSample):
-        """Publish raw IMU data to ROS topic"""
-        try:
-            imu_msg = Imu()
-            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
-            imu_msg.header.frame_id = "imu_raw"
-            
-            # Angular velocity (gyro)
-            imu_msg.angular_velocity.x = sample.gyro_x
-            imu_msg.angular_velocity.y = sample.gyro_y
-            imu_msg.angular_velocity.z = sample.gyro_z
-            
-            # Linear acceleration
-            imu_msg.linear_acceleration.x = sample.accel_x
-            imu_msg.linear_acceleration.y = sample.accel_y
-            imu_msg.linear_acceleration.z = sample.accel_z
-            
-            self.pub_raw_imu.publish(imu_msg)
-        except Exception as e:
-            rospy.logwarn(f"Failed to publish raw IMU: {e}")
-
-    def publish_corrected_imu(self, sample: ImuSample):
-        """Publish corrected IMU data to ROS topic"""
-        try:
-            imu_msg = Imu()
-            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
-            imu_msg.header.frame_id = "imu_corrected"
-            
-            # Angular velocity (gyro)
-            imu_msg.angular_velocity.x = sample.gyro_x
-            imu_msg.angular_velocity.y = sample.gyro_y
-            imu_msg.angular_velocity.z = sample.gyro_z
-            
-            # Linear acceleration
-            imu_msg.linear_acceleration.x = sample.accel_x
-            imu_msg.linear_acceleration.y = sample.accel_y
-            imu_msg.linear_acceleration.z = sample.accel_z
-            
-            self.pub_corrected_imu.publish(imu_msg)
-        except Exception as e:
-            rospy.logwarn(f"Failed to publish corrected IMU: {e}")
-
     def process_sample(self, sample: ImuSample) -> ImuSample:
         """
-        AI processing of IMU sample using ONNX model.
+        AI preprocessing/processing of IMU sample
 
-        Args:
-            sample: Input IMU sample from PX4
+        This is where you would implement:
+        - Noise filtering
+        - Bias correction
+        - ML-based feature extraction
+        - Anomaly detection
+        - Sensor fusion
 
-        Returns:
-            Processed IMU sample with corrections applied
+        For now, we pass through unchanged (identity transform)
         """
-        try:
-            # Extract IMU data
-            input_acc = np.array([sample.accel_x, sample.accel_y, sample.accel_z], dtype=np.float32)
-            input_gyro = np.array([sample.gyro_x, sample.gyro_y, sample.gyro_z], dtype=np.float32)
+        # # DEBUG: Log every 250th sample to check for sign issues
+        # if sample.sequence % 250 == 0:
+        #     print(f"[AI CLIENT] Sample {sample.sequence}: "
+        #           f"accel=[{sample.accel_x:.3f}, {sample.accel_y:.3f}, {sample.accel_z:.3f}] "
+        #           f"gyro=[{sample.gyro_x:.3f}, {sample.gyro_y:.3f}, {sample.gyro_z:.3f}]")
 
-            # Validate input data
-            if not (np.isfinite(input_acc).all() and np.isfinite(input_gyro).all()):
-                print(f"[AI Client] WARNING: Invalid input data, passing through unchanged")
-                self.stats['samples_processed'] += 1
-                return sample
-
-            # Run inference
-            corrected_acc, corrected_gyro = self.inference.inference_airimu(input_acc, input_gyro)
-
-            # Validate output data (CRITICAL: check for NaN/Inf corruption)
-            if not (np.isfinite(corrected_acc).all() and np.isfinite(corrected_gyro).all()):
-                print(f"[AI Client] ERROR: Model produced invalid output (NaN/Inf), passing through original")
-                print(f"  Input acc: {input_acc}")
-                print(f"  Input gyro: {input_gyro}")
-                print(f"  Output acc: {corrected_acc}")
-                print(f"  Output gyro: {corrected_gyro}")
-                self.stats['samples_processed'] += 1
-                self.stats['corrupted_outputs'] += 1
-                return sample
-
-            # Create corrected sample
-            processed = ImuSample(
-                timestamp_us=sample.timestamp_us,
-                sequence=sample.sequence,
-                gyro_x=float(corrected_gyro[0]),
-                gyro_y=float(corrected_gyro[1]),
-                gyro_z=float(corrected_gyro[2]),
-                accel_x=float(corrected_acc[0]),
-                accel_y=float(corrected_acc[1]),
-                accel_z=float(corrected_acc[2]),
-                delta_ang_dt=sample.delta_ang_dt,
-                delta_vel_dt=sample.delta_vel_dt,
-                crc16=sample.crc16
-            )
-
-            self.stats['samples_processed'] += 1
-            return processed
-
-        except Exception as e:
-            print(f"[AI Client] Error processing sample: {e}")
-            import traceback
-            traceback.print_exc()
-            # On error, pass through unchanged
-            self.stats['samples_processed'] += 1
-            return sample
+        # TODO: Implement actual AI processing here
+        # For now, just pass through
+        processed = sample
+        self.stats['samples_processed'] += 1
+        return processed
 
     def send_sample(self, sample: ImuSample) -> bool:
         """Send processed sample back to PX4"""
@@ -409,36 +275,17 @@ class AIClient:
             return False
 
         try:
-            # CRITICAL: Validate all float values before sending to PX4
-            values_to_check = [
-                sample.gyro_x, sample.gyro_y, sample.gyro_z,
-                sample.accel_x, sample.accel_y, sample.accel_z,
-                sample.delta_ang_dt, sample.delta_vel_dt
-            ]
-            
-            if not all(np.isfinite(v) for v in values_to_check):
-                print(f"[AI Client] ERROR: Attempting to send corrupted data to PX4! Dropping sample.")
-                print(f"  Sample: {sample}")
-                self.stats['tx_errors'] += 1
-                return False
-
             # Pack sample into binary format (must match C++ ImuUdpPacket structure)
-            # First pack without CRC to calculate it
-            packet_data_no_crc = struct.pack(
-                '<QI3f3f2f',  # All fields except CRC
+            packet_data = struct.pack(
+                PACKET_FORMAT,
                 sample.timestamp_us,
                 sample.sequence,
                 sample.gyro_x, sample.gyro_y, sample.gyro_z,
                 sample.accel_x, sample.accel_y, sample.accel_z,
                 sample.delta_ang_dt,
-                sample.delta_vel_dt
+                sample.delta_vel_dt,
+                sample.crc16
             )
-
-            # Calculate CRC for the modified data
-            new_crc = self.calculate_crc16(packet_data_no_crc)
-
-            # Now pack the complete packet with the new CRC
-            packet_data = packet_data_no_crc + struct.pack('<H', new_crc)
 
             # Send (TCP handles partial sends automatically)
             self.tx_socket.sendall(packet_data)
@@ -446,7 +293,7 @@ class AIClient:
 
             # Log first few samples
             if self.stats['samples_sent'] <= 4:
-                print(f"TX Sample {self.stats['samples_sent']}: {sample} (CRC: {new_crc:04X})")
+                print(f"TX Sample {self.stats['samples_sent']}: {sample}")
 
             return True
 
@@ -465,9 +312,6 @@ class AIClient:
 
             # AI processing
             processed_sample = self.process_sample(sample)
-
-            # Publish corrected IMU data to ROS
-            self.publish_corrected_imu(processed_sample)
 
             # Send back to PX4
             if self.send_sample(processed_sample):
@@ -488,47 +332,23 @@ class AIClient:
         uptime = now - self.stats['start_time']
         interval = now - self.stats['last_stats_time'] if self.stats['last_stats_time'] else uptime
 
-        # Calculate instantaneous rates (samples per second during this interval)
-        rx_interval = self.stats['samples_received'] - self.stats['last_samples_received']
-        tx_interval = self.stats['samples_sent'] - self.stats['last_samples_sent']
-        processed_interval = self.stats['samples_processed'] - self.stats['last_samples_processed']
-        
-        rx_rate_instant = rx_interval / interval if interval > 0 else 0
-        tx_rate_instant = tx_interval / interval if interval > 0 else 0
-        processed_rate_instant = processed_interval / interval if interval > 0 else 0
-
-        # Calculate average rates (since start)
-        rx_rate_avg = self.stats['samples_received'] / uptime if uptime > 0 else 0
-        tx_rate_avg = self.stats['samples_sent'] / uptime if uptime > 0 else 0
+        rx_rate = self.stats['samples_received'] / uptime if uptime > 0 else 0
+        tx_rate = self.stats['samples_sent'] / uptime if uptime > 0 else 0
 
         print(f"\n{'='*80}")
-        print(f"AI Client Statistics (uptime: {uptime:.1f}s, interval: {interval:.1f}s)")
+        print(f"AI Client Statistics (uptime: {uptime:.1f}s)")
         print(f"{'='*80}")
-        print(f"RX: {self.stats['samples_received']} samples (avg: {rx_rate_avg:.1f} Hz, current: {rx_rate_instant:.1f} Hz)")
-        print(f"TX: {self.stats['samples_sent']} samples (avg: {tx_rate_avg:.1f} Hz, current: {tx_rate_instant:.1f} Hz)")
-        print(f"Processed: {self.stats['samples_processed']} samples (current: {processed_rate_instant:.1f} Hz)")
+        print(f"RX: {self.stats['samples_received']} samples ({rx_rate:.1f} Hz)")
+        print(f"TX: {self.stats['samples_sent']} samples ({tx_rate:.1f} Hz)")
+        print(f"Processed: {self.stats['samples_processed']} samples")
         print(f"Queue depth: {len(self.process_queue)}")
         print(f"RX errors: {self.stats['rx_errors']}")
         print(f"TX errors: {self.stats['tx_errors']}")
         print(f"CRC failures: {self.stats['crc_failures']}")
         print(f"Sequence gaps: {self.stats['sequence_gaps']}")
-        print(f"Corrupted outputs: {self.stats['corrupted_outputs']}")
         print(f"Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
-
-        # Add inference timing statistics
-        if hasattr(self, 'inference'):
-            inference_stats = self.inference.get_statistics()
-            print(f"\nInference Performance:")
-            print(f"  Total inferences: {inference_stats['inference_count']}")
-            print(f"  Avg inference time: {inference_stats['avg_inference_time_ms']:.3f} ms")
-            print(f"  Max inference time: {inference_stats['max_inference_time_ms']:.3f} ms")
-
         print(f"{'='*80}\n")
 
-        # Update counters for next interval
-        self.stats['last_samples_received'] = self.stats['samples_received']
-        self.stats['last_samples_processed'] = self.stats['samples_processed']
-        self.stats['last_samples_sent'] = self.stats['samples_sent']
         self.stats['last_stats_time'] = now
 
     def run(self):

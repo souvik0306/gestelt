@@ -1,9 +1,9 @@
 #!/bin/bash
 
 SESSION="px4_sim"
-PX4_ROOT="${PX4_ROOT:-$HOME/gestelt_ws/PX4-Autopilot}"
+PX4_ROOT="${PX4_ROOT:-$HOME/Ai_imu_ws/PX4-Autopilot/}"
 PX4_LAUNCH_CMD="${PX4_LAUNCH_CMD:-make px4_sitl gazebo}"
-AI_CLIENT_PATH="$HOME/gestelt_ws/src/gestelt/src/imu_listener_pkg/src/ai_imu_client.py"
+AI_CLIENT_PATH="$HOME/Ai_imu_ws/gestelt/src/imu_listener_pkg/src/ai_imu_client.py"
 
 # Verify paths
 [ ! -f "$AI_CLIENT_PATH" ] && echo "[ERROR] AI client not found: $AI_CLIENT_PATH" && exit 1
@@ -33,6 +33,11 @@ tmux send-keys -t "$SESSION":0.2 "sleep 5 && cd $PX4_ROOT && $PX4_LAUNCH_CMD" C-
 tmux split-window -v -t "$SESSION":0.2
 tmux select-pane -t "$SESSION":0.3 -T "MAVROS"
 tmux send-keys -t "$SESSION":0.3 "sleep 15 && source /opt/ros/noetic/setup.bash && roslaunch mavros px4.launch fcu_url:=udp://:14540@localhost:14580 fcu_protocol:=v2.0" C-m
+
+# Pane 4: Rosbag Recording (waits for ROS nodes)
+tmux split-window -v -t "$SESSION":0.3
+tmux select-pane -t "$SESSION":0.4 -T "Rosbag Record"
+tmux send-keys -t "$SESSION":0.4 "sleep 20 && source /opt/ros/noetic/setup.bash && cd /home/dandan/Ai_imu_ws/gestelt && source devel/setup.bash && roslaunch imu_listener_pkg record_imu.launch" C-m
 
 # Set pane borders
 tmux set-option -g pane-border-status top
