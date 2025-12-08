@@ -96,13 +96,14 @@ class AIClient:
             'tx_errors': 0,
             'crc_failures': 0,
             'sequence_gaps': 0,
+            'corrupted_outputs': 0,  # Track NaN/Inf from model
             'last_sequence': None,
             'start_time': None,
             'last_stats_time': None,
         }
 
         # Processing queue
-        self.process_queue = deque(maxlen=256)
+        self.process_queue = deque(maxlen=1000)
 
         # Sample buffer for TCP recv
         self.rx_buffer = b''
@@ -112,17 +113,17 @@ class AIClient:
         pkg_path = os.path.dirname(script_dir)  # imu_listener_pkg root
         
         # Try INT8 model first, fall back to FP32 if not available
-        int8_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_int8.onnx")
-        fp32_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32.onnx")
+        model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_new.onnx")
+        # fp32_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32.onnx")
         
-        if os.path.isfile(int8_model_path):
-            model_path = int8_model_path
-            print(f"Using INT8 quantized model: {model_path}")
-        elif os.path.isfile(fp32_model_path):
-            model_path = fp32_model_path
-            print(f"INT8 model not found, using FP32 model: {model_path}")
-        else:
-            raise FileNotFoundError(f"No model found at {int8_model_path} or {fp32_model_path}")
+        # if os.path.isfile(int8_model_path):
+        #     model_path = int8_model_path
+        #     print(f"Using INT8 quantized model: {model_path}")
+        # elif os.path.isfile(fp32_model_path):
+        #     model_path = fp32_model_path
+        #     print(f"INT8 model not found, using FP32 model: {model_path}")
+        # else:
+        #     raise FileNotFoundError(f"No model found at {int8_model_path} or {fp32_model_path}")
 
         # Initialize inference module (INT8 handled automatically)
         self.inference = RealtimeIMUInference(
@@ -292,8 +293,25 @@ class AIClient:
             input_acc = np.array([sample.accel_x, sample.accel_y, sample.accel_z], dtype=np.float32)
             input_gyro = np.array([sample.gyro_x, sample.gyro_y, sample.gyro_z], dtype=np.float32)
 
+            # Validate input data
+            if not (np.isfinite(input_acc).all() and np.isfinite(input_gyro).all()):
+                print(f"[AI Client] WARNING: Invalid input data, passing through unchanged")
+                self.stats['samples_processed'] += 1
+                return sample
+
             # Run inference
             corrected_acc, corrected_gyro = self.inference.inference_airimu(input_acc, input_gyro)
+
+            # Validate output data (CRITICAL: check for NaN/Inf corruption)
+            if not (np.isfinite(corrected_acc).all() and np.isfinite(corrected_gyro).all()):
+                print(f"[AI Client] ERROR: Model produced invalid output (NaN/Inf), passing through original")
+                print(f"  Input acc: {input_acc}")
+                print(f"  Input gyro: {input_gyro}")
+                print(f"  Output acc: {corrected_acc}")
+                print(f"  Output gyro: {corrected_gyro}")
+                self.stats['samples_processed'] += 1
+                self.stats['corrupted_outputs'] += 1
+                return sample
 
             # Create corrected sample
             processed = ImuSample(
@@ -327,6 +345,19 @@ class AIClient:
             return False
 
         try:
+            # CRITICAL: Validate all float values before sending to PX4
+            values_to_check = [
+                sample.gyro_x, sample.gyro_y, sample.gyro_z,
+                sample.accel_x, sample.accel_y, sample.accel_z,
+                sample.delta_ang_dt, sample.delta_vel_dt
+            ]
+            
+            if not all(np.isfinite(v) for v in values_to_check):
+                print(f"[AI Client] ERROR: Attempting to send corrupted data to PX4! Dropping sample.")
+                print(f"  Sample: {sample}")
+                self.stats['tx_errors'] += 1
+                return False
+
             # Pack sample into binary format (must match C++ ImuUdpPacket structure)
             # First pack without CRC to calculate it
             packet_data_no_crc = struct.pack(
@@ -404,6 +435,7 @@ class AIClient:
         print(f"TX errors: {self.stats['tx_errors']}")
         print(f"CRC failures: {self.stats['crc_failures']}")
         print(f"Sequence gaps: {self.stats['sequence_gaps']}")
+        print(f"Corrupted outputs: {self.stats['corrupted_outputs']}")
         print(f"Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
 
         # Add inference timing statistics
