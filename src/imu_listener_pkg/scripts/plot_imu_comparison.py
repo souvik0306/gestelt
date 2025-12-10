@@ -427,6 +427,100 @@ def plot_comparison(bag_path):
         print(f"Saved: {output_path}")
         plt.close(fig10)
     
+    # ========== Figure 11: Raw IMU Data (Accel & Gyro X, Y) ==========
+    fig11, (ax11_top, ax11_bot) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Top subplot: Raw Accelerometer X and Y
+    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 0], 
+                  label='Accel X', color='#C44569', linewidth=1.5)
+    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 1], 
+                  label='Accel Y', color='#218C74', linewidth=1.5)
+    ax11_top.set_xlabel('Time (s)', fontsize=12)
+    ax11_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
+    ax11_top.set_title('Raw Accelerometer X & Y', fontsize=14, fontweight='bold')
+    ax11_top.set_xlim([0, max_time])
+    ax11_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax11_top.get_xticks() if 0 <= t <= max_time]
+    if max_time not in xticks:
+        xticks.append(max_time)
+    ax11_top.set_xticks(sorted(xticks))
+    ax11_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax11_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax11_top.legend(fontsize=11)
+    ax11_top.grid(True, alpha=0.3)
+    
+    # Bottom subplot: Raw Gyroscope X and Y
+    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 0], 
+                  label='Gyro X', color='#C44569', linewidth=1.5)
+    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 1], 
+                  label='Gyro Y', color='#218C74', linewidth=1.5)
+    ax11_bot.set_xlabel('Time (s)', fontsize=12)
+    ax11_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
+    ax11_bot.set_title('Raw Gyroscope X & Y', fontsize=14, fontweight='bold')
+    ax11_bot.set_xlim([0, max_time])
+    ax11_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax11_bot.get_xticks() if 0 <= t <= max_time]
+    if max_time not in xticks:
+        xticks.append(max_time)
+    ax11_bot.set_xticks(sorted(xticks))
+    ax11_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax11_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax11_bot.legend(fontsize=11)
+    ax11_bot.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_path = os.path.join(results_dir, f'11_raw_imu_xy_{timestamp}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_path}")
+    plt.close(fig11)
+    
+    # ========== Figure 12: Corrected IMU Data (Accel & Gyro X, Y) ==========
+    fig12, (ax12_top, ax12_bot) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Top subplot: Corrected Accelerometer X and Y
+    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 0], 
+                  label='Accel X', color='#C44569', linewidth=1.5)
+    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 1], 
+                  label='Accel Y', color='#218C74', linewidth=1.5)
+    ax12_top.set_xlabel('Time (s)', fontsize=12)
+    ax12_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
+    ax12_top.set_title('Corrected Accelerometer X & Y', fontsize=14, fontweight='bold')
+    ax12_top.set_xlim([0, max_time])
+    ax12_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax12_top.get_xticks() if 0 <= t <= max_time]
+    if max_time not in xticks:
+        xticks.append(max_time)
+    ax12_top.set_xticks(sorted(xticks))
+    ax12_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax12_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax12_top.legend(fontsize=11)
+    ax12_top.grid(True, alpha=0.3)
+    
+    # Bottom subplot: Corrected Gyroscope X and Y
+    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 0], 
+                  label='Gyro X', color='#C44569', linewidth=1.5)
+    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 1], 
+                  label='Gyro Y', color='#218C74', linewidth=1.5)
+    ax12_bot.set_xlabel('Time (s)', fontsize=12)
+    ax12_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
+    ax12_bot.set_title('Corrected Gyroscope X & Y', fontsize=14, fontweight='bold')
+    ax12_bot.set_xlim([0, max_time])
+    ax12_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax12_bot.get_xticks() if 0 <= t <= max_time]
+    if max_time not in xticks:
+        xticks.append(max_time)
+    ax12_bot.set_xticks(sorted(xticks))
+    ax12_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax12_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax12_bot.legend(fontsize=11)
+    ax12_bot.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_path = os.path.join(results_dir, f'12_corrected_imu_xy_{timestamp}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_path}")
+    plt.close(fig12)
+    
     print(f"\nAll plots saved to: {results_dir}")
     print(f"Timestamp: {timestamp}")
 

@@ -210,7 +210,7 @@ def plot_comparison(bag_path):
     ax1.legend(fontsize=11)
     ax1.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'1_accel_x_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'1_accel_x_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig1)
@@ -236,7 +236,7 @@ def plot_comparison(bag_path):
     ax2.legend(fontsize=11)
     ax2.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'2_accel_y_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'2_accel_y_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig2)
@@ -262,7 +262,7 @@ def plot_comparison(bag_path):
     ax3.legend(fontsize=11)
     ax3.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'3_accel_z_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'3_accel_z_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig3)
@@ -292,7 +292,7 @@ def plot_comparison(bag_path):
     ax4.grid(True, alpha=0.3)
     ax4.axhline(y=0, color='k', linestyle='--', alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'4_accel_correction_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'4_accel_correction_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig4)
@@ -318,7 +318,7 @@ def plot_comparison(bag_path):
     ax5.legend(fontsize=11)
     ax5.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'5_gyro_x_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'5_gyro_x_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig5)
@@ -344,7 +344,7 @@ def plot_comparison(bag_path):
     ax6.legend(fontsize=11)
     ax6.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'6_gyro_y_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'6_gyro_y_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig6)
@@ -370,7 +370,7 @@ def plot_comparison(bag_path):
     ax7.legend(fontsize=11)
     ax7.grid(True, alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'7_gyro_z_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'7_gyro_z_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig7)
@@ -400,7 +400,7 @@ def plot_comparison(bag_path):
     ax8.grid(True, alpha=0.3)
     ax8.axhline(y=0, color='k', linestyle='--', alpha=0.3)
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'8_gyro_correction_60s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'8_gyro_correction_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig8)
@@ -423,7 +423,7 @@ def plot_comparison(bag_path):
         ax9.legend(fontsize=11)
         ax9.grid(True, alpha=0.3)
         plt.tight_layout()
-        output_path = os.path.join(results_dir, f'9_position_60s_{timestamp}.png')
+        output_path = os.path.join(results_dir, f'9_position_{TIME_WINDOW}s_{timestamp}.png')
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved: {output_path}")
         plt.close(fig9)
@@ -449,10 +449,104 @@ def plot_comparison(bag_path):
         ax10.set_title(f'3D Trajectory (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
         ax10.legend(fontsize=11)
         plt.tight_layout()
-        output_path = os.path.join(results_dir, f'10_trajectory_3d_60s_{timestamp}.png')
+        output_path = os.path.join(results_dir, f'10_trajectory_3d_{TIME_WINDOW}s_{timestamp}.png')
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"Saved: {output_path}")
         plt.close(fig10)
+    
+    # ========== Figure 11: Raw IMU Data (Accel & Gyro X, Y) ==========
+    fig11, (ax11_top, ax11_bot) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Top subplot: Raw Accelerometer X and Y
+    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 0], 
+                  label='Accel X', color='#C44569', linewidth=1.5)
+    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 1], 
+                  label='Accel Y', color='#218C74', linewidth=1.5)
+    ax11_top.set_xlabel('Time (s)', fontsize=12)
+    ax11_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
+    ax11_top.set_title(f'Raw Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax11_top.set_xlim([0, TIME_WINDOW])
+    ax11_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax11_top.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax11_top.set_xticks(sorted(xticks))
+    ax11_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax11_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax11_top.legend(fontsize=11)
+    ax11_top.grid(True, alpha=0.3)
+    
+    # Bottom subplot: Raw Gyroscope X and Y
+    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 0], 
+                  label='Gyro X', color='#C44569', linewidth=1.5)
+    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 1], 
+                  label='Gyro Y', color='#218C74', linewidth=1.5)
+    ax11_bot.set_xlabel('Time (s)', fontsize=12)
+    ax11_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
+    ax11_bot.set_title(f'Raw Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax11_bot.set_xlim([0, TIME_WINDOW])
+    ax11_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax11_bot.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax11_bot.set_xticks(sorted(xticks))
+    ax11_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax11_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax11_bot.legend(fontsize=11)
+    ax11_bot.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_path = os.path.join(results_dir, f'11_raw_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_path}")
+    plt.close(fig11)
+    
+    # ========== Figure 12: Corrected IMU Data (Accel & Gyro X, Y) ==========
+    fig12, (ax12_top, ax12_bot) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Top subplot: Corrected Accelerometer X and Y
+    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 0], 
+                  label='Accel X', color='#C44569', linewidth=1.5)
+    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 1], 
+                  label='Accel Y', color='#218C74', linewidth=1.5)
+    ax12_top.set_xlabel('Time (s)', fontsize=12)
+    ax12_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
+    ax12_top.set_title(f'Corrected Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax12_top.set_xlim([0, TIME_WINDOW])
+    ax12_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax12_top.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax12_top.set_xticks(sorted(xticks))
+    ax12_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax12_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax12_top.legend(fontsize=11)
+    ax12_top.grid(True, alpha=0.3)
+    
+    # Bottom subplot: Corrected Gyroscope X and Y
+    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 0], 
+                  label='Gyro X', color='#C44569', linewidth=1.5)
+    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 1], 
+                  label='Gyro Y', color='#218C74', linewidth=1.5)
+    ax12_bot.set_xlabel('Time (s)', fontsize=12)
+    ax12_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
+    ax12_bot.set_title(f'Corrected Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax12_bot.set_xlim([0, TIME_WINDOW])
+    ax12_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax12_bot.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax12_bot.set_xticks(sorted(xticks))
+    ax12_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax12_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax12_bot.legend(fontsize=11)
+    ax12_bot.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_path = os.path.join(results_dir, f'12_corrected_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_path}")
+    plt.close(fig12)
     
     print(f"\nAll plots saved to: {results_dir}")
     print(f"Timestamp: {timestamp}")
