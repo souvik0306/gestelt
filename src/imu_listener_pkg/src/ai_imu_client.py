@@ -21,6 +21,7 @@ import time
 import signal
 import sys
 import os
+import subprocess
 import numpy as np
 from collections import deque
 from typing import Optional, Tuple
@@ -51,7 +52,7 @@ PX4_SUBSCRIBER_HOST = '127.0.0.1'
 PX4_SUBSCRIBER_PORT = 14568
 
 # Processing settings
-STATS_INTERVAL_S = 5.0
+STATS_INTERVAL_S = 1.0
 RECONNECT_DELAY_S = 1.0
 
 
@@ -101,6 +102,9 @@ class AIClient:
         # TCP sockets
         self.rx_socket: Optional[socket.socket] = None
         self.tx_socket: Optional[socket.socket] = None
+        
+        # Rosbag recording process
+        self.rosbag_process: Optional[subprocess.Popen] = None
 
         # Statistics
         self.stats = {
@@ -119,6 +123,9 @@ class AIClient:
             'last_samples_received': 0,
             'last_samples_processed': 0,
             'last_samples_sent': 0,
+            # Timing measurements
+            'total_ai_time_ms': 0.0,  # Time spent in AI inference only
+            'total_pipeline_time_ms': 0.0,  # Time spent in RX + AI + TX
         }
 
         # Processing queue
@@ -149,6 +156,69 @@ class AIClient:
             model_path, 
             verbose=False
         )
+
+    def start_rosbag_recording(self) -> bool:
+        """Start rosbag recording"""
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            pkg_path = os.path.dirname(script_dir)
+            bags_dir = os.path.join(pkg_path, 'bags')
+            os.makedirs(bags_dir, exist_ok=True)
+            
+            # Generate timestamped filename
+            timestamp = time.strftime('%Y-%m-%d-%H-%M-%S')
+            bag_file = os.path.join(bags_dir, f'imu_comparison_{timestamp}.bag')
+            
+            # Start rosbag record process
+            cmd = [
+                'rosbag', 'record',
+                '-O', bag_file,
+                '/imu/raw',
+                '/imu/corrected',
+                '/mavros/local_position/pose'
+            ]
+            
+            self.rosbag_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid  # Create new process group for clean shutdown
+            )
+            
+            print(f"Started rosbag recording: {bag_file}")
+            rospy.loginfo(f"Recording to: {bag_file}")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to start rosbag recording: {e}")
+            rospy.logerr(f"Failed to start rosbag recording: {e}")
+            return False
+    
+    def stop_rosbag_recording(self):
+        """Stop rosbag recording gracefully"""
+        if self.rosbag_process:
+            try:
+                print("Stopping rosbag recording...")
+                rospy.loginfo("Stopping rosbag recording...")
+                
+                # Send SIGINT for graceful shutdown
+                self.rosbag_process.send_signal(signal.SIGINT)
+                
+                # Wait for process to finish (with timeout)
+                try:
+                    self.rosbag_process.wait(timeout=5.0)
+                    print("Rosbag recording stopped successfully")
+                    rospy.loginfo("Rosbag recording stopped successfully")
+                except subprocess.TimeoutExpired:
+                    print("Rosbag process did not stop gracefully, forcing termination...")
+                    self.rosbag_process.kill()
+                    self.rosbag_process.wait()
+                    
+            except Exception as e:
+                print(f"Error stopping rosbag: {e}")
+                rospy.logerr(f"Error stopping rosbag: {e}")
+            finally:
+                self.rosbag_process = None
 
     def calculate_crc16(self, data: bytes) -> int:
         """Calculate CRC16-CCITT"""
@@ -223,6 +293,9 @@ class AIClient:
 
     def disconnect(self):
         """Close all connections"""
+        # Stop rosbag recording first
+        self.stop_rosbag_recording()
+        
         if self.rx_socket:
             self.rx_socket.close()
             self.rx_socket = None
@@ -352,6 +425,8 @@ class AIClient:
         Returns:
             Processed IMU sample with corrections applied
         """
+        ai_start_time = time.time()
+        
         try:
             # Extract IMU data
             input_acc = np.array([sample.accel_x, sample.accel_y, sample.accel_z], dtype=np.float32)
@@ -360,11 +435,13 @@ class AIClient:
             # Validate input data
             if not (np.isfinite(input_acc).all() and np.isfinite(input_gyro).all()):
                 print(f"[AI Client] WARNING: Invalid input data, passing through unchanged")
-                self.stats['samples_processed'] += 1
                 return sample
 
-            # Run inference
+            # Run inference (measure this specifically)
+            inference_start = time.time()
             corrected_acc, corrected_gyro = self.inference.inference_airimu(input_acc, input_gyro)
+            ai_time_ms = (time.time() - inference_start) * 1000
+            self.stats['total_ai_time_ms'] += ai_time_ms
 
             # Validate output data (CRITICAL: check for NaN/Inf corruption)
             if not (np.isfinite(corrected_acc).all() and np.isfinite(corrected_gyro).all()):
@@ -373,7 +450,6 @@ class AIClient:
                 print(f"  Input gyro: {input_gyro}")
                 print(f"  Output acc: {corrected_acc}")
                 print(f"  Output gyro: {corrected_gyro}")
-                self.stats['samples_processed'] += 1
                 self.stats['corrupted_outputs'] += 1
                 return sample
 
@@ -392,7 +468,6 @@ class AIClient:
                 crc16=sample.crc16
             )
 
-            self.stats['samples_processed'] += 1
             return processed
 
         except Exception as e:
@@ -400,7 +475,6 @@ class AIClient:
             import traceback
             traceback.print_exc()
             # On error, pass through unchanged
-            self.stats['samples_processed'] += 1
             return sample
 
     def send_sample(self, sample: ImuSample) -> bool:
@@ -443,6 +517,7 @@ class AIClient:
             # Send (TCP handles partial sends automatically)
             self.tx_socket.sendall(packet_data)
             self.stats['samples_sent'] += 1
+            self.stats['samples_processed'] += 1  # Count complete pipeline: RX + AI + TX
 
             # Log first few samples
             if self.stats['samples_sent'] <= 4:
@@ -461,6 +536,9 @@ class AIClient:
         processed_count = 0
 
         while self.process_queue:
+            # Measure complete pipeline time: receive + AI + transmit
+            pipeline_start_time = time.time()
+            
             sample = self.process_queue.popleft()
 
             # AI processing
@@ -471,6 +549,9 @@ class AIClient:
 
             # Send back to PX4
             if self.send_sample(processed_sample):
+                # Measure total pipeline time (queuing + AI + TX)
+                pipeline_time_ms = (time.time() - pipeline_start_time) * 1000
+                self.stats['total_pipeline_time_ms'] += pipeline_time_ms
                 processed_count += 1
             else:
                 # TX error, stop processing and try to reconnect
@@ -486,42 +567,61 @@ class AIClient:
             return
 
         uptime = now - self.stats['start_time']
-        interval = now - self.stats['last_stats_time'] if self.stats['last_stats_time'] else uptime
+        
+        # Use actual elapsed time since last stats print for interval calculation
+        if self.stats['last_stats_time'] is not None:
+            interval = now - self.stats['last_stats_time']
+        else:
+            interval = uptime
 
         # Calculate instantaneous rates (samples per second during this interval)
         rx_interval = self.stats['samples_received'] - self.stats['last_samples_received']
         tx_interval = self.stats['samples_sent'] - self.stats['last_samples_sent']
         processed_interval = self.stats['samples_processed'] - self.stats['last_samples_processed']
         
+        # Calculate instantaneous rates - use actual measured interval
         rx_rate_instant = rx_interval / interval if interval > 0 else 0
         tx_rate_instant = tx_interval / interval if interval > 0 else 0
         processed_rate_instant = processed_interval / interval if interval > 0 else 0
 
-        # Calculate average rates (since start)
+        # Calculate average rates (since start) - most reliable metric
         rx_rate_avg = self.stats['samples_received'] / uptime if uptime > 0 else 0
         tx_rate_avg = self.stats['samples_sent'] / uptime if uptime > 0 else 0
+        processed_rate_avg = self.stats['samples_processed'] / uptime if uptime > 0 else 0
 
         print(f"\n{'='*80}")
-        print(f"AI Client Statistics (uptime: {uptime:.1f}s, interval: {interval:.1f}s)")
+        print(f"AI Client Statistics")
         print(f"{'='*80}")
-        print(f"RX: {self.stats['samples_received']} samples (avg: {rx_rate_avg:.1f} Hz, current: {rx_rate_instant:.1f} Hz)")
-        print(f"TX: {self.stats['samples_sent']} samples (avg: {tx_rate_avg:.1f} Hz, current: {tx_rate_instant:.1f} Hz)")
-        print(f"Processed: {self.stats['samples_processed']} samples (current: {processed_rate_instant:.1f} Hz)")
-        print(f"Queue depth: {len(self.process_queue)}")
-        print(f"RX errors: {self.stats['rx_errors']}")
-        print(f"TX errors: {self.stats['tx_errors']}")
-        print(f"CRC failures: {self.stats['crc_failures']}")
-        print(f"Sequence gaps: {self.stats['sequence_gaps']}")
-        print(f"Corrupted outputs: {self.stats['corrupted_outputs']}")
-        print(f"Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
-
-        # Add inference timing statistics
+        print(f"Runtime: {uptime:.1f}s (last interval: {interval:.3f}s)")
+        print(f"\nAI Model Inference Timing:")
         if hasattr(self, 'inference'):
             inference_stats = self.inference.get_statistics()
-            print(f"\nInference Performance:")
             print(f"  Total inferences: {inference_stats['inference_count']}")
-            print(f"  Avg inference time: {inference_stats['avg_inference_time_ms']:.3f} ms")
-            print(f"  Max inference time: {inference_stats['max_inference_time_ms']:.3f} ms")
+            print(f"  Avg inference time: {inference_stats['avg_inference_time_ms']:.3f} ms/sample")
+            print(f"  Max inference time: {inference_stats['max_inference_time_ms']:.3f} ms/sample")
+        
+        print(f"\nThroughput:")
+        print(f"  RX:        {self.stats['samples_received']} samples | Avg: {rx_rate_avg:.1f} Hz | Current: {rx_rate_instant:.1f} Hz ({rx_interval} samples)")
+        print(f"  TX:        {self.stats['samples_sent']} samples | Avg: {tx_rate_avg:.1f} Hz | Current: {tx_rate_instant:.1f} Hz ({tx_interval} samples)")
+        print(f"  Processed: {self.stats['samples_processed']} samples | Avg: {processed_rate_avg:.1f} Hz | Current: {processed_rate_instant:.1f} Hz ({processed_interval} samples)")
+        
+        # Calculate timing averages
+        if self.stats['samples_processed'] > 0:
+            avg_ai_time = self.stats['total_ai_time_ms'] / self.stats['samples_processed']
+            avg_pipeline_time = self.stats['total_pipeline_time_ms'] / self.stats['samples_processed']
+            overhead_time = avg_pipeline_time - avg_ai_time
+            print(f"\nPipeline Timing (per sample):")
+            print(f"  AI inference only: {avg_ai_time:.3f} ms")
+            print(f"  Total pipeline (RX+AI+TX): {avg_pipeline_time:.3f} ms")
+            print(f"  Overhead (RX+TX+queue): {overhead_time:.3f} ms")
+        print(f"\nErrors & Status:")
+        print(f"  Queue depth: {len(self.process_queue)}")
+        print(f"  RX errors: {self.stats['rx_errors']}")
+        print(f"  TX errors: {self.stats['tx_errors']}")
+        print(f"  CRC failures: {self.stats['crc_failures']}")
+        print(f"  Sequence gaps: {self.stats['sequence_gaps']}")
+        print(f"  Corrupted outputs: {self.stats['corrupted_outputs']}")
+        print(f"  Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
 
         print(f"{'='*80}\n")
 
@@ -538,6 +638,9 @@ class AIClient:
         self.stats['last_stats_time'] = self.stats['start_time']
 
         print("AI IMU Client starting...")
+        
+        # Start rosbag recording
+        self.start_rosbag_recording()
 
         while self.running:
             # Ensure connections are established
@@ -561,9 +664,6 @@ class AIClient:
             now = time.time()
             if now - self.stats['last_stats_time'] >= STATS_INTERVAL_S:
                 self.print_statistics()
-
-            # Small sleep to prevent busy loop
-            time.sleep(0.001)  # 1ms
 
         self.disconnect()
         print("AI IMU Client stopped")

@@ -16,12 +16,13 @@ import rosbag
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
+from matplotlib import ticker
 import sys
 import os
 from datetime import datetime
 
 # Time window to plot (seconds)
-TIME_WINDOW = 80.0
+TIME_WINDOW = 35.0
 
 def extract_imu_data(bag, topic):
     """Extract IMU data from a specific topic"""
@@ -198,6 +199,14 @@ def plot_comparison(bag_path):
     ax1.set_ylabel('Acceleration (m/s²)', fontsize=12)
     ax1.set_title(f'Accelerometer X-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax1.set_xlim([0, TIME_WINDOW])
+    ax1.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    # Ensure last timestamp is shown and filter out negative values
+    xticks = [t for t in ax1.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax1.set_xticks(sorted(xticks))
+    ax1.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax1.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax1.legend(fontsize=11)
     ax1.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -217,6 +226,13 @@ def plot_comparison(bag_path):
     ax2.set_ylabel('Acceleration (m/s²)', fontsize=12)
     ax2.set_title(f'Accelerometer Y-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax2.set_xlim([0, TIME_WINDOW])
+    ax2.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax2.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax2.set_xticks(sorted(xticks))
+    ax2.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax2.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax2.legend(fontsize=11)
     ax2.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -236,6 +252,13 @@ def plot_comparison(bag_path):
     ax3.set_ylabel('Acceleration (m/s²)', fontsize=12)
     ax3.set_title(f'Accelerometer Z-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax3.set_xlim([0, TIME_WINDOW])
+    ax3.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax3.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax3.set_xticks(sorted(xticks))
+    ax3.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax3.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax3.legend(fontsize=11)
     ax3.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -258,6 +281,13 @@ def plot_comparison(bag_path):
     ax4.set_ylabel('Correction (m/s²)', fontsize=12)
     ax4.set_title(f'Accelerometer Correction (Corrected - Raw, First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax4.set_xlim([0, TIME_WINDOW])
+    ax4.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax4.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax4.set_xticks(sorted(xticks))
+    ax4.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax4.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax4.legend(fontsize=11)
     ax4.grid(True, alpha=0.3)
     ax4.axhline(y=0, color='k', linestyle='--', alpha=0.3)
@@ -278,6 +308,13 @@ def plot_comparison(bag_path):
     ax5.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
     ax5.set_title(f'Gyroscope X-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax5.set_xlim([0, TIME_WINDOW])
+    ax5.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax5.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax5.set_xticks(sorted(xticks))
+    ax5.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax5.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax5.legend(fontsize=11)
     ax5.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -297,6 +334,13 @@ def plot_comparison(bag_path):
     ax6.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
     ax6.set_title(f'Gyroscope Y-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax6.set_xlim([0, TIME_WINDOW])
+    ax6.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax6.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax6.set_xticks(sorted(xticks))
+    ax6.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax6.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax6.legend(fontsize=11)
     ax6.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -316,6 +360,13 @@ def plot_comparison(bag_path):
     ax7.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
     ax7.set_title(f'Gyroscope Z-axis: Raw vs Corrected (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax7.set_xlim([0, TIME_WINDOW])
+    ax7.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax7.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax7.set_xticks(sorted(xticks))
+    ax7.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax7.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax7.legend(fontsize=11)
     ax7.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -338,6 +389,13 @@ def plot_comparison(bag_path):
     ax8.set_ylabel('Correction (rad/s)', fontsize=12)
     ax8.set_title(f'Gyroscope Correction (Corrected - Raw, First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax8.set_xlim([0, TIME_WINDOW])
+    ax8.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax8.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax8.set_xticks(sorted(xticks))
+    ax8.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax8.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
     ax8.legend(fontsize=11)
     ax8.grid(True, alpha=0.3)
     ax8.axhline(y=0, color='k', linestyle='--', alpha=0.3)

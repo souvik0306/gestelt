@@ -34,10 +34,7 @@ tmux split-window -v -t "$SESSION":0.2
 tmux select-pane -t "$SESSION":0.3 -T "MAVROS"
 tmux send-keys -t "$SESSION":0.3 "sleep 15 && source /opt/ros/noetic/setup.bash && roslaunch mavros px4.launch fcu_url:=udp://:14540@localhost:14580 fcu_protocol:=v2.0" C-m
 
-# Pane 4: Rosbag Recording (waits for ROS nodes)
-tmux split-window -v -t "$SESSION":0.3
-tmux select-pane -t "$SESSION":0.4 -T "Rosbag Record"
-tmux send-keys -t "$SESSION":0.4 "sleep 20 && source /opt/ros/noetic/setup.bash && cd /home/dandan/Ai_imu_ws/gestelt && source devel/setup.bash && roslaunch imu_listener_pkg record_imu.launch" C-m
+# Note: Rosbag recording is now automatic - starts/stops with AI client for perfect time alignment
 
 # Set pane borders
 tmux set-option -g pane-border-status top

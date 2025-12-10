@@ -9,7 +9,6 @@ Features:
 - Class-based design for easy integration
 - Automatic padding generation for ONNX model
 - Efficient buffering and batching
-- INT8 quantized model support
 - Optional logging for debugging
 - Thread-safe design
 
