@@ -32,7 +32,7 @@ tmux send-keys -t "$SESSION":0.2 "sleep 5 && cd $PX4_ROOT && $PX4_LAUNCH_CMD" C-
 # Pane 3: MAVROS (waits for PX4)
 tmux split-window -v -t "$SESSION":0.2
 tmux select-pane -t "$SESSION":0.3 -T "MAVROS"
-tmux send-keys -t "$SESSION":0.3 "sleep 15 && source /opt/ros/noetic/setup.bash && roslaunch mavros px4.launch fcu_url:=udp://:14540@localhost:14580 fcu_protocol:=v2.0" C-m
+tmux send-keys -t "$SESSION":0.3 "sleep 8 && source /opt/ros/noetic/setup.bash && roslaunch mavros px4.launch fcu_url:=udp://:14540@localhost:14580 fcu_protocol:=v2.0" C-m
 
 # Note: Rosbag recording is now automatic - starts/stops with AI client for perfect time alignment
 

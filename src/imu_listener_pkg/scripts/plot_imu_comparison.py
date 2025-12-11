@@ -402,28 +402,47 @@ def plot_comparison(bag_path):
         plt.close(fig9)
         
         # Figure 10: 3D Trajectory
-        fig10 = plt.figure(figsize=(10, 8))
+        fig10 = plt.figure(figsize=(16, 10))
         ax10 = fig10.add_subplot(111, projection='3d')
-        ax10.plot(position['position'][:, 0], 
-                position['position'][:, 1], 
-                position['position'][:, 2], 
-                color='#0652DD', linewidth=2)
+        
+        # Create color gradient based on time
+        num_points = len(position['position'])
+        cmap = plt.cm.viridis  # Purple (start) to yellow/green (end)
+        
+        # Normalize colors based on time
+        time_normalized = (position['time'] - position['time'][0]) / (position['time'][-1] - position['time'][0])
+        colors = cmap(time_normalized)
+        
+        # Plot trajectory with color gradient (thicker lines)
+        for i in range(num_points - 1):
+            ax10.plot(position['position'][i:i+2, 0], 
+                    position['position'][i:i+2, 1], 
+                    position['position'][i:i+2, 2], 
+                    color=colors[i], linewidth=4.0, alpha=0.9)
+        
         ax10.scatter(position['position'][0, 0], 
                    position['position'][0, 1], 
                    position['position'][0, 2], 
-                   color='green', s=100, label='Start', marker='o')
+                   color='green', s=200, label='Start', marker='o', edgecolors='black', linewidths=1.5)
         ax10.scatter(position['position'][-1, 0], 
                    position['position'][-1, 1], 
                    position['position'][-1, 2], 
-                   color='red', s=100, label='End', marker='x')
-        ax10.set_xlabel('X (m)', fontsize=12)
-        ax10.set_ylabel('Y (m)', fontsize=12)
-        ax10.set_zlabel('Z (m)', fontsize=12)
-        ax10.set_title('3D Trajectory', fontsize=14, fontweight='bold')
-        ax10.legend(fontsize=11)
+                   color='red', s=200, label='End', marker='X', edgecolors='black', linewidths=1.5)
+        
+        # Add colorbar to show time progression with actual time values
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=position['time'][0], vmax=position['time'][-1]))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax10, pad=0.1, shrink=0.8, aspect=20)
+        cbar.set_label('Time (s)', rotation=270, labelpad=25, fontsize=12)
+        
+        ax10.set_xlabel('X (m)', fontsize=13, labelpad=10)
+        ax10.set_ylabel('Y (m)', fontsize=13, labelpad=10)
+        ax10.set_zlabel('Z (m)', fontsize=13, labelpad=10)
+        ax10.set_title('3D Trajectory', fontsize=14, fontweight='bold', pad=20)
+        ax10.legend(fontsize=11, loc='upper left')
         plt.tight_layout()
         output_path = os.path.join(results_dir, f'10_trajectory_3d_{timestamp}.png')
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight', pad_inches=0.3)
         print(f"Saved: {output_path}")
         plt.close(fig10)
     

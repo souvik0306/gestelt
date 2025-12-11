@@ -590,7 +590,16 @@ class AIClient:
         processed_rate_avg = self.stats['samples_processed'] / uptime if uptime > 0 else 0
 
         print(f"\n{'='*80}")
-        print(f"AI Client Statistics")
+        print(f"\nErrors & Status:")
+        print(f"  Queue depth: {len(self.process_queue)}")
+        print(f"  RX errors: {self.stats['rx_errors']}")
+        print(f"  TX errors: {self.stats['tx_errors']}")
+        print(f"  CRC failures: {self.stats['crc_failures']}")
+        print(f"  Sequence gaps: {self.stats['sequence_gaps']}")
+        print(f"  Corrupted outputs: {self.stats['corrupted_outputs']}")
+        print(f"  Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
+
+        print(f"\nAI Client Statistics")
         print(f"{'='*80}")
         print(f"Runtime: {uptime:.1f}s (last interval: {interval:.3f}s)")
         print(f"\nAI Model Inference Timing:")
@@ -614,14 +623,6 @@ class AIClient:
             print(f"  AI inference only: {avg_ai_time:.3f} ms")
             print(f"  Total pipeline (RX+AI+TX): {avg_pipeline_time:.3f} ms")
             print(f"  Overhead (RX+TX+queue): {overhead_time:.3f} ms")
-        print(f"\nErrors & Status:")
-        print(f"  Queue depth: {len(self.process_queue)}")
-        print(f"  RX errors: {self.stats['rx_errors']}")
-        print(f"  TX errors: {self.stats['tx_errors']}")
-        print(f"  CRC failures: {self.stats['crc_failures']}")
-        print(f"  Sequence gaps: {self.stats['sequence_gaps']}")
-        print(f"  Corrupted outputs: {self.stats['corrupted_outputs']}")
-        print(f"  Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
 
         print(f"{'='*80}\n")
 
