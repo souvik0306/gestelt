@@ -192,6 +192,20 @@ EKF2::~EKF2()
 	perf_free(_msg_missed_magnetometer_perf);
 	perf_free(_msg_missed_odometry_perf);
 	perf_free(_msg_missed_optical_flow_perf);
+
+	// Cleanup TCP components
+	if (_tcp_publisher) {
+		_tcp_publisher.reset();
+	}
+	if (_tcp_subscriber) {
+		_tcp_subscriber.reset();
+	}
+
+	// // Cleanup AI subscriber
+	// if (_ai_subscriber) {
+	// 	_ai_subscriber->stop();
+	// 	_ai_subscriber.reset();
+	// }
 }
 
 bool EKF2::multi_init(int imu, int mag)
@@ -273,6 +287,14 @@ void EKF2::Run()
 		return;
 	}
 
+	// Log instance and parameter on first run
+	static bool first_run = true;
+	if (first_run) {
+		PX4_INFO("[EKF2] Starting Run() - instance=%d, EKF2_IMU_SRC=%d",
+		         _instance, _param_ekf2_imu_src.get());
+		first_run = false;
+	}
+
 	// check for parameter updates
 	if (_parameter_update_sub.updated() || !_callback_registered) {
 		// clear update
@@ -281,6 +303,57 @@ void EKF2::Run()
 
 		// update parameters from storage
 		updateParams();
+
+		// Initialize TCP publisher and subscriber for AI mode (EKF2_IMU_SRC = 1)
+		// TCP mode: PX4 publishes to port 14567, receives processed data on port 14568
+		// NOTE: Only initialize for primary EKF instance (_instance == 0) OR single-mode (_instance == -1)
+		if (_instance == 0 || _instance == -1) {
+			if (_param_ekf2_imu_src.get() == 1) {
+				PX4_INFO("[EKF2] TCP AI mode requested (instance=%d, EKF2_IMU_SRC=%d)",
+				         _instance, _param_ekf2_imu_src.get());
+
+				// Initialize TCP publisher
+				if (!_tcp_publisher_initialized) {
+					PX4_INFO("[EKF2] Attempting to initialize TCP Publisher...");
+					_tcp_publisher = std::make_unique<EKF2_TcpPublisher>();
+					if (_tcp_publisher && _tcp_publisher->init()) {
+						_tcp_publisher_initialized = true;
+						PX4_INFO("[EKF2] ✓ TCP IMU Publisher initialized on port 14567");
+					} else {
+						_tcp_publisher_initialized = false;
+						PX4_ERR("[EKF2] ✗ Failed to initialize TCP IMU Publisher");
+					}
+				}
+
+				// Initialize TCP subscriber
+				if (!_tcp_subscriber_initialized) {
+					PX4_INFO("[EKF2] Attempting to initialize TCP Subscriber...");
+					_tcp_subscriber = std::make_unique<EKF2_TcpSubscriber>();
+					if (_tcp_subscriber && _tcp_subscriber->init()) {
+						_tcp_subscriber_initialized = true;
+						PX4_INFO("[EKF2] ✓ TCP IMU Subscriber initialized on port 14568");
+					} else {
+						_tcp_subscriber_initialized = false;
+						PX4_ERR("[EKF2] ✗ Failed to initialize TCP IMU Subscriber");
+					}
+				}
+			} else {
+				// Clean up TCP components if not in TCP mode
+				if (_tcp_publisher_initialized) {
+					_tcp_publisher.reset();
+					_tcp_publisher_initialized = false;
+					PX4_INFO("[EKF2] TCP Publisher stopped - not in TCP AI mode");
+				}
+				if (_tcp_subscriber_initialized) {
+					_tcp_subscriber.reset();
+					_tcp_subscriber_initialized = false;
+					PX4_INFO("[EKF2] TCP Subscriber stopped - not in TCP AI mode");
+				}
+			}
+		} else {
+			PX4_INFO("[EKF2] Skipping TCP init for instance %d (not primary)", _instance);
+		}
+
 
 		_ekf.set_min_required_gps_health_time(_param_ekf2_req_gps_h.get() * 1_s);
 
@@ -499,19 +572,154 @@ void EKF2::Run()
 	}
 
 	if (imu_updated) {
+		// // Log whenever a new vehicle_imu/sample is received and converted to imuSample
+		// PX4_INFO("[IMU] New vehicle_imu sample ts=%llu gyro=[%.3f,%.3f,%.3f] acc=[%.3f,%.3f,%.3f] dt=%.6f",
+		// 		 (unsigned long long)imu_sample_new.time_us,
+		// 		 (double)(imu_sample_new.delta_ang(0) / imu_sample_new.delta_ang_dt),
+		// 		 (double)(imu_sample_new.delta_ang(1) / imu_sample_new.delta_ang_dt),
+		// 		 (double)(imu_sample_new.delta_ang(2) / imu_sample_new.delta_ang_dt),
+		// 		 (double)(imu_sample_new.delta_vel(0) / imu_sample_new.delta_vel_dt),
+		// 		 (double)(imu_sample_new.delta_vel(1) / imu_sample_new.delta_vel_dt),
+		// 		 (double)(imu_sample_new.delta_vel(2) / imu_sample_new.delta_vel_dt),
+		// 		 (double)imu_sample_new.delta_ang_dt);
+
 		const hrt_abstime now = imu_sample_new.time_us;
 
-		// push imu data into estimator
-		_ekf.setIMUData(imu_sample_new);
+		// Determine which IMU data to use for EKF2
+		imuSample imu_sample_for_ekf;
+
+		// TCP AI Mode (EKF2_IMU_SRC = 1): Publish raw IMU to TCP, receive AI-processed data
+		// NOTE: Only instance 0 (or -1 in single mode) has TCP components initialized
+		if (_param_ekf2_imu_src.get() == 1 && (_instance == 0 || _instance == -1)) {
+			// STAGE 1/5: Capture raw IMU data from sensor and store in ring buffer
+			imuSample imu_sample_raw = imu_sample_new;
+			storeRawImuSample(imu_sample_raw, imu_sample_raw.time_us);
+
+			// STAGE 2/5: Publish raw IMU to TCP port 14567 (for Python AI client)
+			if (_tcp_publisher && _tcp_publisher_initialized) {
+				_tcp_publisher->publishSample(
+					imu_sample_raw.time_us,
+					imu_sample_raw.delta_ang,
+					imu_sample_raw.delta_ang_dt,
+					imu_sample_raw.delta_vel,
+					imu_sample_raw.delta_vel_dt);
+			}
+
+			// STAGE 3/5: Receive AI-processed sample from TCP subscriber (port 14568)
+			bool ai_sample_received = false;
+			EKF2_TcpSubscriber::AiProcessedSample ai_sample_from_tcp;
+
+			if (_tcp_subscriber && _tcp_subscriber_initialized) {
+				ai_sample_received = _tcp_subscriber->getAiSample(ai_sample_from_tcp);
+			}
+
+			if (ai_sample_received) {
+				// STAGE 4/5: Match AI sample to original raw sample by timestamp
+				imuSample matched_raw_sample;
+				bool matched = findRawImuSampleByTimestamp(ai_sample_from_tcp.timestamp_us, matched_raw_sample);
+
+				if (!matched) {
+					// No matching raw sample found - skip this AI sample
+					logImuMatchingStats();
+					return;
+				}
+
+				// Log the complete pipeline for this matched sample (every 250th successful match)
+				static uint32_t matched_sample_count = 0;
+				matched_sample_count++;
+				bool log_this_match = (matched_sample_count % 250 == 0);
+
+				if (log_this_match) {
+					PX4_INFO("========== AI PIPELINE TRACE (Sample ts=%" PRIu64 ") ==========", ai_sample_from_tcp.timestamp_us);
+					PX4_INFO("[1/5] RAW CAPTURE: delta_ang=[%.6f,%.6f,%.6f] delta_vel=[%.6f,%.6f,%.6f]",
+					         (double)matched_raw_sample.delta_ang(0),
+					         (double)matched_raw_sample.delta_ang(1),
+					         (double)matched_raw_sample.delta_ang(2),
+					         (double)matched_raw_sample.delta_vel(0),
+					         (double)matched_raw_sample.delta_vel(1),
+					         (double)matched_raw_sample.delta_vel(2));
+					PX4_INFO("[2/5] TCP SENT: Converted to instantaneous: gyro=[%.6f,%.6f,%.6f] acc=[%.6f,%.6f,%.6f]",
+					         (double)(matched_raw_sample.delta_ang(0) / matched_raw_sample.delta_ang_dt),
+					         (double)(matched_raw_sample.delta_ang(1) / matched_raw_sample.delta_ang_dt),
+					         (double)(matched_raw_sample.delta_ang(2) / matched_raw_sample.delta_ang_dt),
+					         (double)(matched_raw_sample.delta_vel(0) / matched_raw_sample.delta_vel_dt),
+					         (double)(matched_raw_sample.delta_vel(1) / matched_raw_sample.delta_vel_dt),
+					         (double)(matched_raw_sample.delta_vel(2) / matched_raw_sample.delta_vel_dt));
+					PX4_INFO("[3/5] TCP RECV: seq=%u gyro_inst=[%.6f,%.6f,%.6f] accel_inst=[%.6f,%.6f,%.6f]",
+					         ai_sample_from_tcp.sequence,
+					         (double)ai_sample_from_tcp.gyro(0),
+					         (double)ai_sample_from_tcp.gyro(1),
+					         (double)ai_sample_from_tcp.gyro(2),
+					         (double)ai_sample_from_tcp.accel(0),
+					         (double)ai_sample_from_tcp.accel(1),
+					         (double)ai_sample_from_tcp.accel(2));
+				}
+
+			// Build EKF sample from AI-processed data + original raw metadata
+			// CRITICAL FIX: Use delta_t from MATCHED raw sample, NOT from AI packet!
+			// The delta_t values vary between samples (0.0039s - 0.0042s at 250Hz).
+			// Using the wrong dt causes integration drift and severe instability.
+			imu_sample_for_ekf.time_us = ai_sample_from_tcp.timestamp_us;
+			imu_sample_for_ekf.delta_ang = ai_sample_from_tcp.gyro * matched_raw_sample.delta_ang_dt;
+			imu_sample_for_ekf.delta_ang_dt = matched_raw_sample.delta_ang_dt;
+			imu_sample_for_ekf.delta_vel = ai_sample_from_tcp.accel * matched_raw_sample.delta_vel_dt;
+			imu_sample_for_ekf.delta_vel_dt = matched_raw_sample.delta_vel_dt;				// Use clipping flags from MATCHED raw sample (not current imu_sample_raw!)
+				imu_sample_for_ekf.delta_vel_clipping[0] = matched_raw_sample.delta_vel_clipping[0];
+				imu_sample_for_ekf.delta_vel_clipping[1] = matched_raw_sample.delta_vel_clipping[1];
+				imu_sample_for_ekf.delta_vel_clipping[2] = matched_raw_sample.delta_vel_clipping[2];
+
+				if (log_this_match) {
+					PX4_INFO("[4/5] CONVERTED BACK: delta_ang=[%.6f,%.6f,%.6f] delta_vel=[%.6f,%.6f,%.6f]",
+					         (double)imu_sample_for_ekf.delta_ang(0),
+					         (double)imu_sample_for_ekf.delta_ang(1),
+					         (double)imu_sample_for_ekf.delta_ang(2),
+					         (double)imu_sample_for_ekf.delta_vel(0),
+					         (double)imu_sample_for_ekf.delta_vel(1),
+					         (double)imu_sample_for_ekf.delta_vel(2));
+					PX4_INFO("[5/5] TO EKF: Feeding AI-processed sample to estimator");
+					PX4_INFO("========== PIPELINE END ==========");
+
+					// MAVROS Frame Comparison (FRD vs ENU)
+					// Calculate instantaneous values for comparison
+					float gyro_x_frd = matched_raw_sample.delta_ang(0) / matched_raw_sample.delta_ang_dt;
+					float gyro_y_frd = matched_raw_sample.delta_ang(1) / matched_raw_sample.delta_ang_dt;
+					float gyro_z_frd = matched_raw_sample.delta_ang(2) / matched_raw_sample.delta_ang_dt;
+					float acc_x_frd = matched_raw_sample.delta_vel(0) / matched_raw_sample.delta_vel_dt;
+					float acc_y_frd = matched_raw_sample.delta_vel(1) / matched_raw_sample.delta_vel_dt;
+					float acc_z_frd = matched_raw_sample.delta_vel(2) / matched_raw_sample.delta_vel_dt;
+
+					PX4_INFO("========== MAVROS FRAME COMPARISON (ts=%" PRIu64 ") ==========",
+					        ai_sample_from_tcp.timestamp_us);
+					PX4_INFO("[PX4 FRD] gyro: x=%.6f y=%.6f z=%.6f (rad/s)",
+					         (double)gyro_x_frd, (double)gyro_y_frd, (double)gyro_z_frd);
+					PX4_INFO("[PX4 FRD] accel: x=%.6f y=%.6f z=%.6f (m/s²)",
+					         (double)acc_x_frd, (double)acc_y_frd, (double)acc_z_frd);
+					PX4_INFO("[Expected ENU] gyro: x=%.6f y=%.6f z=%.6f (FRD→ENU: x=y, y=x, z=-z)",
+					         (double)gyro_y_frd, (double)gyro_x_frd, (double)(-gyro_z_frd));
+					PX4_INFO("[Expected ENU] accel: x=%.6f y=%.6f z=%.6f (FRD→ENU: x=y, y=x, z=-z)",
+					         (double)acc_y_frd, (double)acc_x_frd, (double)(-acc_z_frd));
+					PX4_INFO("Compare with: rostopic echo /mavros/imu/data");
+					PX4_INFO("========== END COMPARISON ==========");
+				}
+
+				// Log matching stats periodically
+				logImuMatchingStats();
+			} else {
+				// No AI sample available yet, skip this cycle
+				return;
+			}
+		}
+
+		_ekf.setIMUData(imu_sample_for_ekf);
 		PublishAttitude(now); // publish attitude immediately (uses quaternion from output predictor)
 
 		// integrate time to monitor time slippage
 		if (_start_time_us > 0) {
 			_integrated_time_us += imu_dt;
-			_last_time_slip_us = (imu_sample_new.time_us - _start_time_us) - _integrated_time_us;
+			_last_time_slip_us = (imu_sample_for_ekf.time_us - _start_time_us) - _integrated_time_us;
 
 		} else {
-			_start_time_us = imu_sample_new.time_us;
+			_start_time_us = imu_sample_for_ekf.time_us;
 			_last_time_slip_us = 0;
 		}
 
@@ -592,7 +800,7 @@ void EKF2::Run()
 			perf_set_elapsed(_ecl_ekf_update_full_perf, hrt_elapsed_time(&ekf_update_start));
 
 			PublishLocalPosition(now);
-			PublishOdometry(now, imu_sample_new);
+			PublishOdometry(now, imu_sample_for_ekf);
 			PublishGlobalPosition(now);
 			PublishWindEstimate(now);
 
@@ -626,6 +834,16 @@ void EKF2::Run()
 
 		// publish ekf2_timestamps
 		_ekf2_timestamps_pub.publish(ekf2_timestamps);
+
+		// Log TCP publisher/subscriber statistics periodically if EKF2_IMU_SRC == 1
+		// if (_param_ekf2_imu_src.get() == 1) {
+		// 	if (_tcp_publisher && _tcp_publisher_initialized) {
+		// 		_tcp_publisher->logStatistics();
+		// 	}
+		// 	if (_tcp_subscriber && _tcp_subscriber_initialized) {
+		// 		_tcp_subscriber->logStatistics();
+		// 	}
+		// }
 	}
 
 	// re-schedule as backup timeout
@@ -1009,6 +1227,14 @@ void EKF2::PublishLocalPosition(const hrt_abstime &timestamp)
 	// publish vehicle local position data
 	lpos.timestamp = _replay_mode ? timestamp : hrt_absolute_time();
 	_local_position_pub.publish(lpos);
+
+	// Log local position every 250 publishes (~1 second at 250Hz)
+	static uint32_t lpos_log_count = 0;
+	lpos_log_count++;
+	if ((lpos_log_count % 250) == 0) {
+		PX4_INFO("[EKF2] Local pos NED: x=%.3f y=%.3f z=%.3f",
+		         (double)lpos.x, (double)lpos.y, (double)lpos.z);
+	}
 }
 
 void EKF2::PublishOdometry(const hrt_abstime &timestamp, const imuSample &imu)
@@ -1428,6 +1654,93 @@ float EKF2::filter_altitude_ellipsoid(float amsl_hgt)
 	}
 
 	return amsl_hgt + _wgs84_hgt_offset;
+}
+
+// ======================= RAW IMU RING BUFFER IMPLEMENTATION =======================
+
+void EKF2::storeRawImuSample(const imuSample &sample, uint64_t timestamp_us)
+{
+	// Store in circular ring buffer
+	_raw_imu_ring_buffer[_raw_imu_ring_index].sample = sample;
+	_raw_imu_ring_buffer[_raw_imu_ring_index].timestamp_us = timestamp_us;
+	_raw_imu_ring_buffer[_raw_imu_ring_index].valid = true;
+
+	// Advance ring index
+	_raw_imu_ring_index = (_raw_imu_ring_index + 1) % RAW_IMU_RING_BUFFER_SIZE;
+	_raw_imu_samples_stored++;
+}
+
+bool EKF2::findRawImuSampleByTimestamp(uint64_t timestamp_us, imuSample &matched_sample)
+{
+	_imu_matching_stats.total_ai_samples_received++;
+
+	// Search ring buffer for matching timestamp
+	bool found = false;
+	int64_t best_time_diff = INT64_MAX;
+	size_t best_idx = 0;
+
+	for (size_t i = 0; i < RAW_IMU_RING_BUFFER_SIZE; i++) {
+		if (!_raw_imu_ring_buffer[i].valid) {
+			continue;
+		}
+
+		int64_t time_diff = static_cast<int64_t>(timestamp_us) - static_cast<int64_t>(_raw_imu_ring_buffer[i].timestamp_us);
+		int64_t abs_time_diff = (time_diff >= 0) ? time_diff : -time_diff;
+
+		if (abs_time_diff < best_time_diff) {
+			best_time_diff = abs_time_diff;
+			best_idx = i;
+			found = true;
+		}
+	}
+
+	if (!found) {
+		_imu_matching_stats.failed_matches_no_timestamp++;
+		PX4_ERR("[EKF2] AI sample match FAILED: No valid samples in ring buffer (ts=%" PRIu64 ")", timestamp_us);
+		return false;
+	}
+
+	// Check if best match is within tolerance
+	if (best_time_diff > static_cast<int64_t>(TIMESTAMP_MATCH_TOLERANCE_US)) {
+		_imu_matching_stats.failed_matches_tolerance++;
+		PX4_WARN("[EKF2] AI sample match FAILED: Best match %" PRId64 " us away (ts=%" PRIu64 ", tolerance=%" PRIu64 " us)",
+			 best_time_diff, timestamp_us, TIMESTAMP_MATCH_TOLERANCE_US);
+		return false;
+	}
+
+	// Success! Found matching sample
+	matched_sample = _raw_imu_ring_buffer[best_idx].sample;
+	_imu_matching_stats.successful_matches++;
+
+	// Log successful match periodically
+	if ((_imu_matching_stats.successful_matches % 100) == 0) {
+		PX4_INFO("[EKF2] AI sample matched: ts=%" PRIu64 ", raw_ts=%" PRIu64 ", diff=%" PRId64 " us",
+			 timestamp_us, _raw_imu_ring_buffer[best_idx].timestamp_us, best_time_diff);
+	}
+
+	return true;
+}
+
+void EKF2::logImuMatchingStats()
+{
+	const hrt_abstime now = hrt_absolute_time();
+
+	// Log every 5 seconds
+	if ((now - _imu_matching_stats.last_log_time) > 5_s) {
+		if (_imu_matching_stats.total_ai_samples_received > 0) {
+			float success_rate = 100.0f * _imu_matching_stats.successful_matches / _imu_matching_stats.total_ai_samples_received;
+
+			PX4_INFO("[EKF2] IMU Matching Stats:");
+			PX4_INFO("  Total AI samples: %" PRIu64, _imu_matching_stats.total_ai_samples_received);
+			PX4_INFO("  Successful matches: %" PRIu64 " (%.1f%%)", _imu_matching_stats.successful_matches, (double)success_rate);
+			PX4_INFO("  Failed - no timestamp: %" PRIu64, _imu_matching_stats.failed_matches_no_timestamp);
+			PX4_INFO("  Failed - expired: %" PRIu64, _imu_matching_stats.failed_matches_expired);
+			PX4_INFO("  Failed - tolerance: %" PRIu64, _imu_matching_stats.failed_matches_tolerance);
+			PX4_INFO("  Raw samples stored: %" PRIu64, _raw_imu_samples_stored);
+		}
+
+		_imu_matching_stats.last_log_time = now;
+	}
 }
 
 void EKF2::UpdateAirspeedSample(ekf2_timestamps_s &ekf2_timestamps)
