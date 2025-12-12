@@ -132,7 +132,7 @@ class IMUInferenceNode:
         # Paths
         rp = rospkg.RosPack()
         self.pkg_path = rp.get_path("imu_listener_pkg")
-        self.onnx_path = os.path.join(self.pkg_path, "models", "airimu_cpu_fp32.onnx")
+        self.onnx_path = os.path.join(self.pkg_path, "models", "airimu_cpu_fp32_new.onnx")
         self.results_path = os.path.join(self.pkg_path, "results", "corrected_imu.npz")
         
         # Components
@@ -151,25 +151,31 @@ class IMUInferenceNode:
         self.inference_count = 0
         self.total_samples_processed = 0
         
-        # Statistics (use fixed-size circular buffer)
-        self.inference_times = np.zeros(1000, dtype=np.float32)  # Keep last 1000
-        self.time_idx = 0
+        # Statistics (use deque for efficient append)
+        self.inference_times = deque(maxlen=1000)  # Keep last 1000
+        
+        # Results storage
+        self.results = []
     
     def check_files(self):
         """Verify ONNX model exists."""
         if not os.path.isfile(self.onnx_path):
             rospy.logerr(f"ONNX model not found: {self.onnx_path}")
-            rospy.logerr("Please export model using: python export_onnx_new.py")
             return False
         return True
     
     def load_model(self):
-        """Load ONNX model with optimized settings."""
+        """Load ONNX model with optimized settings for fixed input size."""
         try:
             session_options = ort.SessionOptions()
+            # Aggressive optimization for fixed input shapes (no dynamic axes)
             session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            session_options.enable_cpu_mem_arena = True  # Optimize memory allocation
+            session_options.enable_mem_pattern = True     # Reuse memory patterns
+            session_options.enable_mem_reuse = True       # Enable memory reuse
             session_options.intra_op_num_threads = os.cpu_count()
-            session_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+            session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL  # Better for small fixed models
+            session_options.add_session_config_entry("session.intra_op.allow_spinning", "1")  # Reduce latency
             
             self.onnx_model = ort.InferenceSession(
                 self.onnx_path,
@@ -207,6 +213,10 @@ class IMUInferenceNode:
             # Trim arrays to actual size
             n = self.inference_count
             
+            # Convert deque to list for averaging
+            times_list = list(self.inference_times)
+            avg_time_ms = np.mean(times_list) * 1000 if times_list else 0.0
+            
             # Save as compressed numpy format (10-100x faster than pickle)
             np.savez_compressed(
                 self.results_path,
@@ -215,7 +225,7 @@ class IMUInferenceNode:
                 interval=INTERVAL,
                 total_inferences=self.inference_count,
                 total_samples=self.total_samples_processed,
-                avg_inference_time_ms=np.mean(self.inference_times[:min(n, 1000)]) * 1000,
+                avg_inference_time_ms=avg_time_ms,
                 # Data arrays
                 raw_acc=self.raw_acc_buffer[:n],
                 raw_gyro=self.raw_gyro_buffer[:n],
@@ -273,23 +283,22 @@ class IMUInferenceNode:
             self.inference_count += 1
             self.total_samples_processed += N
             
-            # Store results
-            result = {
-                'raw_acc': acc,
-                'raw_gyro': gyro,
-                'corrected_acc': corrected_acc,
-                'corrected_gyro': corrected_gyro,
-            }
-            self.results.append(result)
+            # Store results in pre-allocated buffers
+            idx = self.inference_count - 1
+            if idx < self.max_samples:
+                self.raw_acc_buffer[idx] = acc[0]  # Store first sample of batch
+                self.raw_gyro_buffer[idx] = gyro[0]
+                self.corrected_acc_buffer[idx] = corrected_acc[0]
+                self.corrected_gyro_buffer[idx] = corrected_gyro[0]
             
             # Log inference summary every 100 inferences
             if self.inference_count % 100 == 0:
-                avg_time_recent = np.mean(self.inference_times[-100:]) * 1000 if len(self.inference_times) >= 100 else np.mean(self.inference_times) * 1000
+                avg_time_recent = np.mean(list(self.inference_times)[-100:]) * 1000 if len(self.inference_times) >= 100 else np.mean(list(self.inference_times)) * 1000
                 rospy.loginfo(f"[Progress] Inferences: {self.inference_count}, Samples: {self.total_samples_processed}, Avg time: {avg_time_recent:.2f}ms")
 
-            # Save results periodically (every 500 inferences)
-            if self.inference_count % 500 == 0:
-                self.save_results()
+            # NPZ saving disabled for performance (enable manually if needed)
+            # if self.inference_count % 500 == 0:
+            #     self.save_results()
             
         except Exception as e:
             rospy.logerr(f"Inference error: {e}")
@@ -337,14 +346,15 @@ class IMUInferenceNode:
         rospy.loginfo(f"Total samples processed: {self.total_samples_processed}")
         
         if self.inference_times:
-            avg_time = np.mean(self.inference_times) * 1000
-            min_time = np.min(self.inference_times) * 1000
-            max_time = np.max(self.inference_times) * 1000
+            times_array = np.array(list(self.inference_times))
+            avg_time = np.mean(times_array) * 1000
+            min_time = np.min(times_array) * 1000
+            max_time = np.max(times_array) * 1000
             rospy.loginfo(f"Inference time (ms): avg={avg_time:.2f}, min={min_time:.2f}, max={max_time:.2f}")
         
-        # Final save
-        self.save_results()
-        rospy.loginfo(f"Results saved to: {self.pickle_path}")
+        # NPZ saving disabled for performance (enable manually if needed)
+        # self.save_results()
+        # rospy.loginfo(f"Results saved to: {self.results_path}")
         rospy.loginfo("="*70)
     
     def start(self):

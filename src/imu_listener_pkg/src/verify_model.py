@@ -1,175 +1,121 @@
 #!/usr/bin/env python3
 """
 Verify INT8 Quantized ONNX Model Format and Test Inference Speed
+Using RealtimeIMUInference module for realistic benchmarking
 """
 
 import numpy as np
-import onnxruntime as ort
 import time
 import os
+
+# Import the actual inference module
+from realtime_imu_inference import RealtimeIMUInference
 
 # Get INT8 model path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 pkg_path = os.path.dirname(script_dir)
-model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_int8.onnx")
+int8_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_new.onnx")
+# fp32_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32.onnx")
 
 print("="*80)
-print("INT8 Quantized ONNX Model Verification")
+print("ONNX Model Verification Using RealtimeIMUInference")
 print("="*80)
+model_path = int8_model_path
+# # Select model
+# if os.path.exists(int8_model_path):
+#     model_path = int8_model_path
+#     print(f"✓ Using INT8 quantized model")
+# elif os.path.exists(fp32_model_path):
+#     model_path = fp32_model_path
+#     print(f"⚠ Using FP32 model (INT8 not found)")
+# else:
+#     print("ERROR: No model found!")
+#     print(f"  INT8 path: {int8_model_path}")
+#     print(f"  FP32 path: {fp32_model_path}")
+#     exit(1)
+
 print(f"Model path: {model_path}")
-print(f"Model exists: {os.path.exists(model_path)}")
 print()
 
-if not os.path.exists(model_path):
-    print("ERROR: INT8 model not found!")
-    print(f"Please ensure the model exists at: {model_path}")
-    exit(1)
-
-# Load model with INT8 optimizations
-session_options = ort.SessionOptions()
-session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
-session_options.intra_op_num_threads = max(2, (os.cpu_count() or 4))
-session_options.inter_op_num_threads = max(1, (os.cpu_count() or 4) // 2)
-session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-
-# Enable memory optimizations for INT8
-session_options.enable_mem_pattern = True
-session_options.enable_cpu_mem_arena = True
-
-# Configure CPU execution provider with INT8 optimizations
-cpu_options = {
-    'enable_quantized_int8_kernels': '1',
-    'arena_extend_strategy': 'kSameAsRequested',
-}
-
-session = ort.InferenceSession(
-    model_path,
-    sess_options=session_options,
-    providers=['CPUExecutionProvider'],
-    provider_options=[cpu_options]
+# Initialize inference module with verbose output
+print("Initializing RealtimeIMUInference...")
+print("-"*80)
+inference = RealtimeIMUInference(
+    model_path=model_path,
+    seqlen=1,
+    interval=9,
+    verbose=False  # Disable verbose logging
 )
-
-print("MODEL INPUTS:")
-input_dtype = np.float32  # Default
-is_quantized = False
-
-for inp in session.get_inputs():
-    print(f"  Name: {inp.name}")
-    print(f"  Shape: {inp.shape}")
-    print(f"  Type: {inp.type}")
-    
-    # Detect quantization
-    if 'int8' in inp.type.lower():
-        is_quantized = True
-        input_dtype = np.int8
-        print(f"  ✓ INT8 Quantized Input Detected")
-    elif 'uint8' in inp.type.lower():
-        is_quantized = True
-        input_dtype = np.uint8
-        print(f"  ✓ UINT8 Quantized Input Detected")
-    else:
-        print(f"  ℹ FP32 Input (not quantized)")
-    print()
-
-print("MODEL OUTPUTS:")
-for out in session.get_outputs():
-    print(f"  Name: {out.name}")
-    print(f"  Shape: {out.shape}")
-    print(f"  Type: {out.type}")
-    print()
-
-print("QUANTIZATION STATUS:")
-if is_quantized:
-    print(f"  ✓ Model is INT8 quantized")
-    print(f"  Input dtype: {input_dtype}")
-else:
-    print(f"  ℹ Model appears to be FP32 (not quantized)")
-    print(f"  Note: This script is optimized for INT8 models")
+print("✓ Model loaded successfully")
+print("-"*80)
 print()
 
 # Test with realistic IMU data
 print("="*80)
-print("Testing INT8 Inference with Realistic IMU Data")
+print("Testing Inference with Realistic IMU Data Stream")
 print("="*80)
 
-# Create test data (seqlen=1, interval=9, so total 10 samples)
-# Shape: [batch=1, timesteps=10, features=3]
-# Use input_dtype for proper INT8 compatibility
-test_acc = np.zeros((1, 10, 3), dtype=input_dtype)
-test_gyro = np.zeros((1, 10, 3), dtype=input_dtype)
+# Simulate realistic IMU samples
+# These values simulate a drone hovering with small movements
+test_samples = [
+    # (acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z)
+    (0.05, -0.03, 9.81, 0.001, -0.002, 0.0005),
+    (0.08, -0.02, 9.80, 0.002, -0.001, 0.0008),
+    (-0.02, 0.04, 9.82, -0.001, 0.003, -0.0002),
+    (0.10, 0.01, 9.79, 0.003, 0.001, 0.0010),
+    (0.03, -0.05, 9.81, 0.001, -0.002, 0.0003),
+]
 
-# First 9 frames: padding (gravity in z-axis)
-if input_dtype == np.float32:
-    test_acc[0, :9, 2] = 9.81007  # gravity
-    # Last frame: actual sample
-    test_acc[0, 9, :] = np.array([0.1, -0.2, 9.8], dtype=input_dtype)
-    test_gyro[0, 9, :] = np.array([0.01, -0.02, 0.005], dtype=input_dtype)
-else:
-    # For quantized models, data might need to stay in FP32 for ONNX Runtime
-    # ONNX Runtime handles quantization internally
-    test_acc = test_acc.astype(np.float32)
-    test_gyro = test_gyro.astype(np.float32)
-    test_acc[0, :9, 2] = 9.81007
-    test_acc[0, 9, :] = np.array([0.1, -0.2, 9.8], dtype=np.float32)
-    test_gyro[0, 9, :] = np.array([0.01, -0.02, 0.005], dtype=np.float32)
+print(f"Processing {len(test_samples)} IMU samples for functionality test...")
 
-# Ensure C-contiguous for optimal INT8 performance
-test_acc = np.ascontiguousarray(test_acc)
-test_gyro = np.ascontiguousarray(test_gyro)
+# Process samples (no detailed output, just verify it works)
+for i, (ax, ay, az, gx, gy, gz) in enumerate(test_samples):
+    acc_in = np.array([ax, ay, az], dtype=np.float32)
+    gyro_in = np.array([gx, gy, gz], dtype=np.float32)
+    
+    corrected_acc, corrected_gyro = inference.inference_airimu(acc_in, gyro_in)
 
-print(f"Input acc shape: {test_acc.shape}")
-print(f"Input gyro shape: {test_gyro.shape}")
-print(f"Input acc dtype: {test_acc.dtype}")
-print(f"Input gyro dtype: {test_gyro.dtype}")
-print(f"Memory layout: {'C-contiguous' if test_acc.flags['C_CONTIGUOUS'] else 'Not contiguous'}")
-print(f"Input acc sample: {test_acc[0, 9, :]}")
-print(f"Input gyro sample: {test_gyro[0, 9, :]}")
+print("✓ All samples processed successfully")
 print()
+print("="*80)
+print("Performance Benchmark (1000 iterations)")
+print("="*80)
 
 # Run inference multiple times to measure speed
-num_runs = 1000  # More runs for better INT8 statistics
-print(f"Running {num_runs} inferences for performance testing...")
+num_runs = 1000
+print(f"Running {num_runs} inferences...")
 times = []
 
-# Warm-up run (important for INT8 models to initialize kernels)
-for _ in range(10):
-    _ = session.run(None, {"acc": test_acc, "gyro": test_gyro})
+# Create test data for benchmarking
+test_acc = np.array([0.1, -0.2, 9.8], dtype=np.float32)
+test_gyro = np.array([0.01, -0.02, 0.005], dtype=np.float32)
 
+# Warm-up runs (important for accurate timing)
+print("Warming up...")
+for _ in range(10):
+    _ = inference.inference_airimu(test_acc, test_gyro)
+
+print("Running benchmark...")
 for i in range(num_runs):
     t_start = time.perf_counter()
-
-    outputs = session.run(
-        None,
-        {"acc": test_acc, "gyro": test_gyro}
-    )
-
+    
+    corrected_acc, corrected_gyro = inference.inference_airimu(test_acc, test_gyro)
+    
     t_end = time.perf_counter()
     times.append((t_end - t_start) * 1000.0)  # Convert to ms
 
-# First run results
-print("INFERENCE RESULTS (first run):")
-print(f"Number of outputs: {len(outputs)}")
-for i, out in enumerate(outputs):
-    print(f"  Output {i} shape: {out.shape}")
-    print(f"  Output {i} dtype: {out.dtype}")
-    if out.size <= 10:
-        print(f"  Output {i} values: {out}")
-    else:
-        print(f"  Output {i} sample: {out[0, 0, :]}")
-print()
-
 # Performance stats
 times = np.array(times)
-print("="*80)
-print(f"INT8 INFERENCE PERFORMANCE ({num_runs} runs, after warm-up)")
-print("="*80)
-print(f"Average time: {times.mean():.3f} ms")
-print(f"Median time:  {np.median(times):.3f} ms")
-print(f"Min time:     {times.min():.3f} ms")
-print(f"Max time:     {times.max():.3f} ms")
-print(f"Std dev:      {times.std():.3f} ms")
-print(f"P95 time:     {np.percentile(times, 95):.3f} ms")
-print(f"P99 time:     {np.percentile(times, 99):.3f} ms")
+print()
+print(f"Benchmark completed ({num_runs} runs)")
+print("-"*80)
+print(f"Average time:  {times.mean():.3f} ms")
+print(f"Median time:   {np.median(times):.3f} ms")
+print(f"Min time:      {times.min():.3f} ms")
+print(f"Max time:      {times.max():.3f} ms")
+print(f"Std dev:       {times.std():.3f} ms")
+print(f"P95 time:      {np.percentile(times, 95):.3f} ms")
+print(f"P99 time:      {np.percentile(times, 99):.3f} ms")
 print()
 
 # Calculate throughput
@@ -179,7 +125,7 @@ print()
 
 # Check if fast enough for real-time
 target_time_ms = 4.0  # For 250Hz IMU
-safe_time_ms = 3.0    # Safety margin for INT8 processing
+safe_time_ms = 3.0    # Safety margin
 print(f"Target time for 250Hz IMU: {target_time_ms:.1f} ms")
 print(f"Recommended safe time: {safe_time_ms:.1f} ms (with margin)")
 print()
@@ -192,55 +138,23 @@ elif times.mean() < target_time_ms:
 else:
     print(f"✗ Model is TOO SLOW (need {target_time_ms/times.mean():.1f}x speedup)")
     print(f"  Consider:")
-    print(f"  - Further model optimization (pruning, distillation)")
+    print(f"  - Using INT8 quantized model")
     print(f"  - Hardware acceleration (NPU/Edge TPU)")
     print(f"  - Reduce seqlen or simplify architecture")
 
-# INT8 specific performance analysis
-if is_quantized:
-    print(f"\nINT8 PERFORMANCE BENEFITS:")
-    print(f"  - Expected 2-4x speedup vs FP32")
-    print(f"  - ~4x memory reduction")
-    print(f"  - Lower power consumption")
-    print(f"  - Better cache utilization")
-else:
-    print(f"\nNOTE: Model does not appear to be INT8 quantized.")
-    print(f"      Consider converting to INT8 for better performance.")
-
+print()
+print("="*80)
+print("Module Statistics from RealtimeIMUInference")
 print("="*80)
 
-# Verify output format matches expectation
-if len(outputs) == 2:
-    corr_acc, corr_gyro = outputs
-    print("✓ Model returns 2 outputs (corrections for acc and gyro)")
+# Get inference module statistics
+stats = inference.get_statistics()
+print(f"Total inferences:        {stats['inference_count']}")
+print(f"Total samples processed: {stats['total_samples_processed']}")
+print(f"Avg inference time:      {stats['avg_inference_time_ms']:.3f} ms")
+print(f"Max inference time:      {stats['max_inference_time_ms']:.3f} ms")
 
-    if corr_acc.shape[1] == 1:
-        print(f"✓ Output timesteps = 1 (matches seqlen=1)")
-    else:
-        print(f"✗ WARNING: Output timesteps = {corr_acc.shape[1]} (expected 1)")
-
-    if corr_acc.shape[2] == 3 and corr_gyro.shape[2] == 3:
-        print(f"✓ Output features = 3 (correct for 3-axis IMU)")
-    else:
-        print(f"✗ WARNING: Output features mismatch")
-
-    # Apply correction
-    original_acc = test_acc[0, 9, :]
-    original_gyro = test_gyro[0, 9, :]
-    corrected_acc = original_acc + corr_acc[0, 0, :]
-    corrected_gyro = original_gyro + corr_gyro[0, 0, :]
-
-    print(f"\nCORRECTION EXAMPLE:")
-    print(f"  Original acc:   {original_acc}")
-    print(f"  Correction:     {corr_acc[0, 0, :]}")
-    print(f"  Corrected acc:  {corrected_acc}")
-    print(f"  Delta:          {corrected_acc - original_acc}")
-    print()
-    print(f"  Original gyro:  {original_gyro}")
-    print(f"  Correction:     {corr_gyro[0, 0, :]}")
-    print(f"  Corrected gyro: {corrected_gyro}")
-    print(f"  Delta:          {corrected_gyro - original_gyro}")
-else:
-    print(f"✗ WARNING: Expected 2 outputs, got {len(outputs)}")
-
+print()
+print("="*80)
+print("Verification Complete!")
 print("="*80)

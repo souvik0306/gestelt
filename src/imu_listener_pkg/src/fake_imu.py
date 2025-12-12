@@ -1,184 +1,239 @@
 #!/usr/bin/env python3
 """
-UDP delta sender for PX4 imu_ai_bridge.
+Real-time IMU Inference ROS Node
 
-Subscribes to /mavros/imu/data (ENU frame), applies simple low-pass
-denoising, converts the vectors to the FRD body frame required by
-vehicle_imu_ai, then sends the packed struct over UDP to the PX4
-bridge.
+This ROS node:
+1. Subscribes to /imu_data topic (from rosbag or live data)
+2. Processes each IMU sample through ONNX model using RealtimeIMUInference
+3. Publishes corrected IMU data to /corrected_imu topic
+4. Logs inference results to file
 
-Struct layout matching vehicle_imu_ai.msg:
-    uint64  timestamp
-    uint64  timestamp_sample
-    uint32  accel_device_id
-    uint32  gyro_device_id
-    float32[3] delta_angle
-    float32[3] delta_velocity
-    uint16  delta_angle_dt           # microseconds
-    uint16  delta_velocity_dt        # microseconds
-    uint8   delta_velocity_clipping
-    uint8   accel_calibration_count
-    uint8   gyro_calibration_count
+Usage:
+    rosrun imu_listener_pkg fake_imu.py
+    
+    # With rosbag:
+    rosbag play your_imu_data.bag
 """
 
-import socket
-import struct
 import rospy
+import numpy as np
+import os
+import rospkg
+import sys
 from sensor_msgs.msg import Imu
+from realtime_imu_inference import RealtimeIMUInference
 
 
-class AIDeltaSender:
+class CorrectedIMUPublisher:
+    """Publishes corrected IMU messages to a ROS topic."""
+    
+    def __init__(self, topic_name="/corrected_imu"):
+        self.pub = rospy.Publisher(topic_name, Imu, queue_size=100)
+        rospy.loginfo(f"[Publisher] Publishing corrected IMU to: {topic_name}")
+
+    def publish(self, corrected_acc, corrected_gyro, original_header):
+        """
+        Publish corrected IMU data.
+        
+        Args:
+            corrected_acc: Corrected acceleration [ax, ay, az]
+            corrected_gyro: Corrected gyroscope [gx, gy, gz]  
+            original_header: Original message header (preserves timestamp and frame)
+        """
+        imu_msg = Imu()
+
+        # Keep original timestamp and frame
+        imu_msg.header = original_header
+
+        # Corrected acceleration
+        imu_msg.linear_acceleration.x = float(corrected_acc[0])
+        imu_msg.linear_acceleration.y = float(corrected_acc[1])
+        imu_msg.linear_acceleration.z = float(corrected_acc[2])
+
+        # Corrected gyroscope
+        imu_msg.angular_velocity.x = float(corrected_gyro[0])
+        imu_msg.angular_velocity.y = float(corrected_gyro[1])
+        imu_msg.angular_velocity.z = float(corrected_gyro[2])
+
+        # Keep original orientation (if available)
+        imu_msg.orientation = rospy.get_param('~preserve_orientation', True) and hasattr(self, 'orientation')
+        
+        self.pub.publish(imu_msg)
+
+
+class RealtimeIMUNode:
+    """Main ROS node for real-time IMU inference."""
+    
     def __init__(self):
-        self._load_params()
-        self._setup_udp()
-        self._init_state()
-        rospy.Subscriber(self.imu_topic, Imu, self.on_imu)
-        rospy.loginfo(
-            "[ai_delta_sender] UDP -> %s:%d, alpha=%.3f, accel_id=0x%08X, gyro_id=0x%08X",
-            self.udp_host,
-            self.udp_port,
-            self.alpha,
-            self.accel_device_id,
-            self.gyro_device_id,
-        )
-
-    def _load_params(self):
-        """Load parameters from ROS or set defaults."""
-        self.udp_host = rospy.get_param('~udp_host', '127.0.0.1')
-        self.udp_port = int(rospy.get_param('~udp_port', 14560))
-        self.alpha = float(rospy.get_param('~alpha', 0.2))  # Low Pass Filter coefficient [0.2]
-        self.max_dt = float(rospy.get_param('~max_dt', 0.04))  # cap dt to 2x nominal 200 Hz
-        self.min_dt = float(rospy.get_param('~min_dt', 5e-4))
-        self.accel_device_id = int(rospy.get_param('~accel_device_id', 0xA14ACC01))
-        self.gyro_device_id = int(rospy.get_param('~gyro_device_id', 0xA14A7701))
-        self.gyro_bias = rospy.get_param('~gyro_bias', [0.0, 0.0, 0.001])
-        self.accel_bias = rospy.get_param('~accel_bias', [0.0, 0.0, 0.001])
-        self.imu_topic = rospy.get_param('~imu_topic', '/mavros/imu/data_raw')
-
-    def _setup_udp(self):
-        """Initialize UDP socket."""
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.target = (self.udp_host, self.udp_port)
-
-    def _init_state(self):
-        """Initialize filter and state variables."""
-        self.last_stamp = None
-        self.filt_gyro = [0.0, 0.0, 0.0]
-        self.filt_accel = [0.0, 0.0, 0.0]
-        self.msg_count = 0
-        self.start_time = rospy.Time.now().to_sec()
-        self._last_short_dt_log = 0.0
-
-    @staticmethod
-    def _clamp(x, lo, hi):
-        """Clamp value x to [lo, hi]."""
-        return max(lo, min(hi, x))
-
-    @staticmethod
-    def _enu_to_frd(vec):
-        """Convert ENU vector to PX4 FRD body frame."""
-        return [vec[1], vec[0], -vec[2]]
-
-    def _filter(self, new, prev):
-        """First-order low-pass filter."""
-        alp = self.alpha
-        inv = 1.0 - alp
-        return [alp * new[i] + inv * prev[i] for i in range(3)]
-
-    def _pack_payload(self, da, dv, dt, stamp):
-        """Pack IMU delta data into struct for UDP."""
-        now_us = int(rospy.Time.now().to_sec() * 1e6)
-        timestamp_us = now_us
-        timestamp_sample = int(stamp * 1e6)
-        delta_angle_dt = int(round(dt * 1e6))
-        delta_velocity_dt = int(round(dt * 1e6))
-        # Saturate to uint16
-        delta_angle_dt = max(0, min(0xFFFF, delta_angle_dt))
-        delta_velocity_dt = max(0, min(0xFFFF, delta_velocity_dt))
-        delta_angle_clipping = 0
-        delta_velocity_clipping = 0
-        accel_calibration_count = 0
-        gyro_calibration_count = 0
-        fmt = '<QQII3f3fHHBBBB'
-        return struct.pack(
-            fmt,
-            timestamp_us,
-            timestamp_sample,
-            self.accel_device_id,
-            self.gyro_device_id,
-            da[0], da[1], da[2],
-            dv[0], dv[1], dv[2],
-            delta_angle_dt,
-            delta_velocity_dt,
-            delta_angle_clipping,
-            delta_velocity_clipping,
-            accel_calibration_count,
-            gyro_calibration_count,
-        )
-
-    def on_imu(self, imu: Imu):
-        """IMU callback: process, filter, convert, and send UDP."""
-        stamp = imu.header.stamp.to_sec() if imu.header.stamp and imu.header.stamp.to_sec() > 0 else rospy.Time.now().to_sec()
-        if self.last_stamp is None:
-            self.last_stamp = stamp
-            # Initialize filters with first sample (converted to FRD)
-            self.filt_gyro = self._enu_to_frd([
-                imu.angular_velocity.x,
-                imu.angular_velocity.y,
-                imu.angular_velocity.z,
-            ])
-            self.filt_accel = self._enu_to_frd([
-                imu.linear_acceleration.x,
-                imu.linear_acceleration.y,
-                imu.linear_acceleration.z,
-            ])
-            return
-        dt = stamp - self.last_stamp
-        now_sec = rospy.Time.now().to_sec()
-        # Drop samples with too short/negative dt
-        if dt <= 0.0 or dt < self.min_dt:
-            if now_sec - self._last_short_dt_log >= 5.0:
-                rospy.logwarn(
-                    f"[ai_delta_sender] skipping short/negative dt {dt * 1e6:.3f}us "
-                    f"(min={self.min_dt * 1e6:.3f}us)"
-                )
-                self._last_short_dt_log = now_sec
-            return
-        self.last_stamp = stamp
-        dt = self._clamp(dt, self.min_dt, self.max_dt)
-        # Remove bias and convert to FRD
-        g_enu = [imu.angular_velocity.x - self.gyro_bias[0],
-                 imu.angular_velocity.y - self.gyro_bias[1],
-                 imu.angular_velocity.z - self.gyro_bias[2]]
-        a_enu = [imu.linear_acceleration.x - self.accel_bias[0],
-                 imu.linear_acceleration.y - self.accel_bias[1],
-                 imu.linear_acceleration.z - self.accel_bias[2]]
-        g = self._enu_to_frd(g_enu)
-        a = self._enu_to_frd(a_enu)
-        # Low-pass filter
-        self.filt_gyro = self._filter(g, self.filt_gyro)
-        self.filt_accel = self._filter(a, self.filt_accel)
-        # Integrate to deltas
-        da = [self.filt_gyro[i] * dt for i in range(3)]
-        dv = [self.filt_accel[i] * dt for i in range(3)]
-        # Pack and send
-        payload = self._pack_payload(da, dv, dt, stamp)
+        # Get package paths
+        rp = rospkg.RosPack()
+        self.pkg_path = rp.get_path("imu_listener_pkg")
+        
+        # Model and log paths
+        model_path = os.path.join(self.pkg_path, "models", "airimu_euroc.onnx")
+        log_path = os.path.join(self.pkg_path, "results", "realtime_imu_inference.txt")
+        
+        # Initialize inference module
+        self.inference = RealtimeIMUInference(model_path, log_path)
+        
+        # Initialize publisher
+        self.corrected_imu_pub = CorrectedIMUPublisher("/corrected_imu")
+        
+        # Statistics
+        self.sample_count = 0
+        self.start_time = None
+        
+        print("=" * 70)
+        print("[INIT] Realtime IMU Inference Node Starting")
+        print(f"[INFO] Python version: {sys.version.split()[0]}")
+        print(f"[INFO] Model path: {model_path}")
+        print(f"[INFO] Log path: {log_path}")
+        print("=" * 70)
+    
+    def check_inference_ready(self) -> bool:
+        """Check if inference module is ready."""
+        if not hasattr(self.inference, 'onnx_model') or self.inference.onnx_model is None:
+            rospy.logwarn("[WARNING] ONNX model not loaded. Running in pass-through mode.")
+            return False
+        return True
+    
+    def imu_callback(self, msg: Imu):
+        """
+        Process incoming IMU message.
+        
+        Args:
+            msg: ROS IMU message from /imu_data topic
+        """
         try:
-            self.sock.sendto(payload, self.target)
-            self.msg_count += 1
-            if self.msg_count % 200 == 0:
+            # Initialize timing on first sample
+            if self.start_time is None:
+                self.start_time = rospy.Time.now().to_sec()
+                rospy.loginfo("[READY] Receiving IMU data, starting inference...")
+            
+            # Extract IMU data
+            input_acc = np.array([
+                msg.linear_acceleration.x,
+                msg.linear_acceleration.y,
+                msg.linear_acceleration.z
+            ], dtype=np.float32)
+            
+            input_gyro = np.array([
+                msg.angular_velocity.x,
+                msg.angular_velocity.y,
+                msg.angular_velocity.z
+            ], dtype=np.float32)
+            
+            # Get timestamp for logging
+            timestamp_us = int(msg.header.stamp.to_sec() * 1e6)
+            
+            # Process through inference module
+            corrected_acc, corrected_gyro = self.inference.process(
+                input_acc, 
+                input_gyro,
+                timestamp_us=timestamp_us,
+                sequence=self.sample_count
+            )
+            
+            # Publish corrected IMU data
+            self.corrected_imu_pub.publish(corrected_acc, corrected_gyro, msg.header)
+            
+            # Update statistics
+            self.sample_count += 1
+            
+            # Log progress periodically
+            if self.sample_count % 100 == 0:
                 elapsed = rospy.Time.now().to_sec() - self.start_time
-                rate = self.msg_count / elapsed if elapsed > 0 else 0.0
-                rospy.loginfo(f"[ai_delta_sender] sent={self.msg_count}, rate={rate:.1f} Hz, dt={dt*1e3:.2f} ms")
+                rate = self.sample_count / elapsed if elapsed > 0 else 0
+                rospy.loginfo(f"[STATS] Processed {self.sample_count} samples, Rate: {rate:.1f} Hz")
+            
+            # Log first few samples with more detail
+            elif self.sample_count <= 5:
+                rospy.loginfo(f"[Sample {self.sample_count}] Input acc: [{input_acc[0]:.3f}, {input_acc[1]:.3f}, {input_acc[2]:.3f}]")
+                rospy.loginfo(f"[Sample {self.sample_count}] Output acc: [{corrected_acc[0]:.3f}, {corrected_acc[1]:.3f}, {corrected_acc[2]:.3f}]")
+                
         except Exception as e:
-            rospy.logwarn(f"[ai_delta_sender] UDP send failed: {e}")
+            rospy.logerr(f"[ERROR] Failed to process IMU sample: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())
+    
+    def print_final_statistics(self):
+        """Print final statistics on shutdown."""
+        if self.start_time and self.sample_count > 0:
+            elapsed = rospy.Time.now().to_sec() - self.start_time
+            avg_rate = self.sample_count / elapsed if elapsed > 0 else 0
+            
+            rospy.loginfo("=" * 70)
+            rospy.loginfo("[FINAL STATS]")
+            rospy.loginfo(f"Total samples processed: {self.sample_count}")
+            rospy.loginfo(f"Total time: {elapsed:.2f} seconds")
+            rospy.loginfo(f"Average rate: {avg_rate:.2f} Hz")
+            rospy.loginfo("=" * 70)
+    
+    def shutdown_hook(self):
+        """Clean up resources on shutdown."""
+        rospy.loginfo("[SHUTDOWN] Cleaning up...")
+        
+        # Print final statistics
+        self.print_final_statistics()
+        
+        # Close inference module (handles log file)
+        if hasattr(self, 'inference'):
+            self.inference.close()
+            
+        rospy.loginfo("[SHUTDOWN] Cleanup complete")
+    
+    def start(self):
+        """Start the ROS node."""
+        # Check if inference is ready
+        inference_ready = self.check_inference_ready()
+        if not inference_ready:
+            rospy.logwarn("[WARNING] Continuing without model - data will pass through unchanged")
+        
+        # Set up subscriber
+        input_topic = rospy.get_param('~input_topic', '/imu_data')
+        queue_size = rospy.get_param('~queue_size', 1000)
+        
+        rospy.loginfo("=" * 70)
+        rospy.loginfo(f"[INIT] ROS time: {rospy.Time.now().to_sec():.2f}")
+        rospy.loginfo(f"[STATUS] Subscribing to: {input_topic}")
+        rospy.loginfo(f"[STATUS] Queue size: {queue_size}")
+        rospy.loginfo(f"[STATUS] Publishing to: /corrected_imu")
+        rospy.loginfo(f"[STATUS] Waiting for IMU data...")
+        rospy.loginfo("=" * 70)
+        
+        # Subscribe to IMU data
+        rospy.Subscriber(input_topic, Imu, self.imu_callback, queue_size=queue_size)
+        
+        # Register shutdown hook
+        rospy.on_shutdown(self.shutdown_hook)
+        
+        # Spin
+        try:
+            rospy.spin()
+        except KeyboardInterrupt:
+            rospy.loginfo("[INFO] Keyboard interrupt received")
+        except Exception as e:
+            rospy.logerr(f"[ERROR] Node error: {e}")
+            import traceback
+            rospy.logerr(traceback.format_exc())
 
-    def spin(self):
-        """Start ROS spin loop."""
-        rospy.spin()
+
+def main():
+    """Main entry point."""
+    try:
+        # Initialize ROS node first
+        rospy.init_node("realtime_imu_inference_node", anonymous=True)
+        
+        # Create and start node
+        node = RealtimeIMUNode()
+        node.start()
+        
+    except Exception as e:
+        print(f"[FATAL] Failed to start node: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
-if __name__ == '__main__':
-    rospy.init_node('ai_delta_sender')
-    node = AIDeltaSender()
-    node.spin()
+if __name__ == "__main__":
+    main()
