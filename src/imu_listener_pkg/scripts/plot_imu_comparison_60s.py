@@ -477,65 +477,70 @@ def plot_comparison(bag_path):
         plt.savefig(output_path, dpi=200, bbox_inches='tight', pad_inches=0.3)
         print(f"Saved: {output_path}")
         plt.close(fig10)
+        
+        # ========== Figure 11: 2D Trajectory (XY Plane) ==========
+        fig11 = plt.figure(figsize=(12, 12))
+        ax11 = fig11.add_subplot(111)
+        
+        # Create color gradient based on time
+        num_points = len(position['position'])
+        cmap = plt.cm.viridis  # Purple (start) to yellow/green (end)
+        
+        # Normalize colors based on actual position timestamps
+        time_start = position['time'][0]
+        time_end = position['time'][-1]
+        time_range = time_end - time_start
+        
+        # Map each position timestamp to a color
+        normalized_times = (position['time'] - time_start) / time_range
+        colors = cmap(normalized_times)
+        
+        # Plot trajectory with color gradient (thicker lines)
+        for i in range(num_points - 1):
+            ax11.plot(position['position'][i:i+2, 0], 
+                     position['position'][i:i+2, 1], 
+                     color=colors[i], linewidth=3.0, alpha=0.9)
+        
+        # Mark start and end points
+        ax11.scatter(position['position'][0, 0], 
+                    position['position'][0, 1], 
+                    color='green', s=300, label='Start', marker='o', 
+                    edgecolors='black', linewidths=2.5, zorder=5)
+        ax11.scatter(position['position'][-1, 0], 
+                    position['position'][-1, 1], 
+                    color='red', s=300, label='End', marker='X', 
+                    edgecolors='black', linewidths=2.5, zorder=5)
+        
+        # Add colorbar to show time progression
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=time_start, vmax=time_end))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax11, pad=0.02, shrink=0.8, aspect=30)
+        cbar.set_label('Time (s)', rotation=270, labelpad=25, fontsize=13)
+        
+        ax11.set_xlabel('X Position (m)', fontsize=13)
+        ax11.set_ylabel('Y Position (m)', fontsize=13)
+        ax11.set_title(f'2D Trajectory (XY Plane, First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+        ax11.legend(fontsize=12, loc='best')
+        ax11.grid(True, alpha=0.3, linestyle='--')
+        ax11.set_aspect('equal', adjustable='box')  # Equal aspect ratio for XY plane
+        
+        plt.tight_layout()
+        output_path = os.path.join(results_dir, f'11_trajectory_2d_xy_{TIME_WINDOW}s_{timestamp}.png')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight')
+        print(f"Saved: {output_path}")
+        plt.close(fig11)
     
-    # ========== Figure 11: Raw IMU Data (Accel & Gyro X, Y) ==========
-    fig11, (ax11_top, ax11_bot) = plt.subplots(2, 1, figsize=(12, 10))
-    
-    # Top subplot: Raw Accelerometer X and Y
-    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 0], 
-                  label='Accel X', color='#C44569', linewidth=1.5)
-    ax11_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 1], 
-                  label='Accel Y', color='#218C74', linewidth=1.5)
-    ax11_top.set_xlabel('Time (s)', fontsize=12)
-    ax11_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
-    ax11_top.set_title(f'Raw Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
-    ax11_top.set_xlim([0, TIME_WINDOW])
-    ax11_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
-    xticks = [t for t in ax11_top.get_xticks() if 0 <= t <= TIME_WINDOW]
-    if TIME_WINDOW not in xticks:
-        xticks.append(TIME_WINDOW)
-    ax11_top.set_xticks(sorted(xticks))
-    ax11_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
-    ax11_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
-    ax11_top.legend(fontsize=11)
-    ax11_top.grid(True, alpha=0.3)
-    
-    # Bottom subplot: Raw Gyroscope X and Y
-    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 0], 
-                  label='Gyro X', color='#C44569', linewidth=1.5)
-    ax11_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 1], 
-                  label='Gyro Y', color='#218C74', linewidth=1.5)
-    ax11_bot.set_xlabel('Time (s)', fontsize=12)
-    ax11_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
-    ax11_bot.set_title(f'Raw Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
-    ax11_bot.set_xlim([0, TIME_WINDOW])
-    ax11_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
-    xticks = [t for t in ax11_bot.get_xticks() if 0 <= t <= TIME_WINDOW]
-    if TIME_WINDOW not in xticks:
-        xticks.append(TIME_WINDOW)
-    ax11_bot.set_xticks(sorted(xticks))
-    ax11_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
-    ax11_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
-    ax11_bot.legend(fontsize=11)
-    ax11_bot.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    output_path = os.path.join(results_dir, f'11_raw_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
-    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    print(f"Saved: {output_path}")
-    plt.close(fig11)
-    
-    # ========== Figure 12: Corrected IMU Data (Accel & Gyro X, Y) ==========
+    # ========== Figure 12: Raw IMU Data (Accel & Gyro X, Y) ==========
     fig12, (ax12_top, ax12_bot) = plt.subplots(2, 1, figsize=(12, 10))
     
-    # Top subplot: Corrected Accelerometer X and Y
-    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 0], 
+    # Top subplot: Raw Accelerometer X and Y
+    ax12_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 0], 
                   label='Accel X', color='#C44569', linewidth=1.5)
-    ax12_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 1], 
+    ax12_top.plot(raw_imu['time'][:min_len], raw_imu['accel'][:min_len, 1], 
                   label='Accel Y', color='#218C74', linewidth=1.5)
     ax12_top.set_xlabel('Time (s)', fontsize=12)
     ax12_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
-    ax12_top.set_title(f'Corrected Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax12_top.set_title(f'Raw Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax12_top.set_xlim([0, TIME_WINDOW])
     ax12_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
     xticks = [t for t in ax12_top.get_xticks() if 0 <= t <= TIME_WINDOW]
@@ -547,14 +552,14 @@ def plot_comparison(bag_path):
     ax12_top.legend(fontsize=11)
     ax12_top.grid(True, alpha=0.3)
     
-    # Bottom subplot: Corrected Gyroscope X and Y
-    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 0], 
+    # Bottom subplot: Raw Gyroscope X and Y
+    ax12_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 0], 
                   label='Gyro X', color='#C44569', linewidth=1.5)
-    ax12_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 1], 
+    ax12_bot.plot(raw_imu['time'][:min_len], raw_imu['gyro'][:min_len, 1], 
                   label='Gyro Y', color='#218C74', linewidth=1.5)
     ax12_bot.set_xlabel('Time (s)', fontsize=12)
     ax12_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
-    ax12_bot.set_title(f'Corrected Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax12_bot.set_title(f'Raw Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
     ax12_bot.set_xlim([0, TIME_WINDOW])
     ax12_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
     xticks = [t for t in ax12_bot.get_xticks() if 0 <= t <= TIME_WINDOW]
@@ -567,10 +572,110 @@ def plot_comparison(bag_path):
     ax12_bot.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    output_path = os.path.join(results_dir, f'12_corrected_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
+    output_path = os.path.join(results_dir, f'12_raw_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Saved: {output_path}")
     plt.close(fig12)
+    
+    # ========== Figure 13: Corrected IMU Data (Accel & Gyro X, Y) ==========
+    fig13, (ax13_top, ax13_bot) = plt.subplots(2, 1, figsize=(12, 10))
+    
+    # Top subplot: Corrected Accelerometer X and Y
+    ax13_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 0], 
+                  label='Accel X', color='#C44569', linewidth=1.5)
+    ax13_top.plot(corrected_imu['time'][:min_len], corrected_imu['accel'][:min_len, 1], 
+                  label='Accel Y', color='#218C74', linewidth=1.5)
+    ax13_top.set_xlabel('Time (s)', fontsize=12)
+    ax13_top.set_ylabel('Acceleration (m/s²)', fontsize=12)
+    ax13_top.set_title(f'Corrected Accelerometer X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax13_top.set_xlim([0, TIME_WINDOW])
+    ax13_top.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax13_top.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax13_top.set_xticks(sorted(xticks))
+    ax13_top.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax13_top.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax13_top.legend(fontsize=11)
+    ax13_top.grid(True, alpha=0.3)
+    
+    # Bottom subplot: Corrected Gyroscope X and Y
+    ax13_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 0], 
+                  label='Gyro X', color='#C44569', linewidth=1.5)
+    ax13_bot.plot(corrected_imu['time'][:min_len], corrected_imu['gyro'][:min_len, 1], 
+                  label='Gyro Y', color='#218C74', linewidth=1.5)
+    ax13_bot.set_xlabel('Time (s)', fontsize=12)
+    ax13_bot.set_ylabel('Angular Velocity (rad/s)', fontsize=12)
+    ax13_bot.set_title(f'Corrected Gyroscope X & Y (First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+    ax13_bot.set_xlim([0, TIME_WINDOW])
+    ax13_bot.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+    xticks = [t for t in ax13_bot.get_xticks() if 0 <= t <= TIME_WINDOW]
+    if TIME_WINDOW not in xticks:
+        xticks.append(TIME_WINDOW)
+    ax13_bot.set_xticks(sorted(xticks))
+    ax13_bot.yaxis.set_major_locator(ticker.MaxNLocator(nbins=15))
+    ax13_bot.yaxis.set_major_formatter(ticker.FormatStrFormatter('%.4f'))
+    ax13_bot.legend(fontsize=11)
+    ax13_bot.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    output_path = os.path.join(results_dir, f'13_corrected_imu_xy_{TIME_WINDOW}s_{timestamp}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved: {output_path}")
+    plt.close(fig13)
+    
+    # ========== Figure 13: 2D Trajectory (XY Plane) ==========
+    if position and len(position['time']) > 0:
+        fig13 = plt.figure(figsize=(12, 12))
+        ax13 = fig13.add_subplot(111)
+        
+        # Create color gradient based on time
+        num_points = len(position['position'])
+        cmap = plt.cm.viridis  # Purple (start) to yellow/green (end)
+        
+        # Normalize colors based on actual position timestamps
+        time_start = position['time'][0]
+        time_end = position['time'][-1]
+        time_range = time_end - time_start
+        
+        # Map each position timestamp to a color
+        normalized_times = (position['time'] - time_start) / time_range
+        colors = cmap(normalized_times)
+        
+        # Plot trajectory with color gradient (thicker lines)
+        for i in range(num_points - 1):
+            ax13.plot(position['position'][i:i+2, 0], 
+                     position['position'][i:i+2, 1], 
+                     color=colors[i], linewidth=3.0, alpha=0.9)
+        
+        # Mark start and end points
+        ax13.scatter(position['position'][0, 0], 
+                    position['position'][0, 1], 
+                    color='green', s=300, label='Start', marker='o', 
+                    edgecolors='black', linewidths=2.5, zorder=5)
+        ax13.scatter(position['position'][-1, 0], 
+                    position['position'][-1, 1], 
+                    color='red', s=300, label='End', marker='X', 
+                    edgecolors='black', linewidths=2.5, zorder=5)
+        
+        # Add colorbar to show time progression
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=time_start, vmax=time_end))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax13, pad=0.02, shrink=0.8, aspect=30)
+        cbar.set_label('Time (s)', rotation=270, labelpad=25, fontsize=13)
+        
+        ax13.set_xlabel('X Position (m)', fontsize=13)
+        ax13.set_ylabel('Y Position (m)', fontsize=13)
+        ax13.set_title(f'2D Trajectory (XY Plane, First {TIME_WINDOW}s)', fontsize=14, fontweight='bold')
+        ax13.legend(fontsize=12, loc='best')
+        ax13.grid(True, alpha=0.3, linestyle='--')
+        ax13.set_aspect('equal', adjustable='box')  # Equal aspect ratio for XY plane
+        
+        plt.tight_layout()
+        output_path = os.path.join(results_dir, f'13_trajectory_2d_xy_{TIME_WINDOW}s_{timestamp}.png')
+        plt.savefig(output_path, dpi=200, bbox_inches='tight')
+        print(f"Saved: {output_path}")
+        plt.close(fig13)
     
     print(f"\nAll plots saved to: {results_dir}")
     print(f"Timestamp: {timestamp}")
