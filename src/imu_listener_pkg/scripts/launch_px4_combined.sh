@@ -16,18 +16,18 @@ tmux has-session -t "$SESSION" 2>/dev/null && tmux kill-session -t "$SESSION"
 tmux new-session -d -s "$SESSION"
 tmux split-window -h -p 80 -t "$SESSION":0
 
-# Pane 0: QGroundControl
-tmux select-pane -t "$SESSION":0.0 -T "QGroundControl"
-tmux send-keys -t "$SESSION":0.0 "cd ~/Downloads && ./QGroundControl.AppImage" C-m
+# Pane 0: PX4 SITL + Gazebo (waits for model)
+tmux select-pane -t "$SESSION":0.0 -T "PX4 SITL + Gazebo"
+tmux send-keys -t "$SESSION":0.0 "sleep 5 && cd $PX4_ROOT && $PX4_LAUNCH_CMD" C-m
 
 # Pane 1: AI IMU Client (loads model first)
 tmux select-pane -t "$SESSION":0.1 -T "AI IMU Client"
 tmux send-keys -t "$SESSION":0.1 "python3 $AI_CLIENT_PATH" C-m
 
-# Pane 2: PX4 SITL + Gazebo (waits for model)
+# Pane 2: QGroundControl
 tmux split-window -v -t "$SESSION":0.1
-tmux select-pane -t "$SESSION":0.2 -T "PX4 SITL + Gazebo"
-tmux send-keys -t "$SESSION":0.2 "sleep 5 && cd $PX4_ROOT && $PX4_LAUNCH_CMD" C-m
+tmux select-pane -t "$SESSION":0.2 -T "QGroundControl"
+tmux send-keys -t "$SESSION":0.2 "cd ~/Downloads && ./QGroundControl.AppImage" C-m
 
 # Pane 3: MAVROS (waits for PX4)
 tmux split-window -v -t "$SESSION":0.2
