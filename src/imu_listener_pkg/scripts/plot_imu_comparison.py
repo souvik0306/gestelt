@@ -377,25 +377,40 @@ def plot_comparison(bag_path):
     # ========== Position plots (if available) ==========
     if position:
         # Figure 9: Local Position
-        fig9 = plt.figure(figsize=(12, 6))
-        ax9 = fig9.add_subplot(111)
-        ax9.plot(position['time'], position['position'][:, 0], 
-                label='X', color='#C44569', linewidth=1.5)
-        ax9.plot(position['time'], position['position'][:, 1], 
-                label='Y', color='#218C74', linewidth=1.5)
-        ax9.plot(position['time'], position['position'][:, 2], 
-                label='Z', color='#0652DD', linewidth=1.5)
-        ax9.set_xlabel('Time (s)', fontsize=12)
-        ax9.set_ylabel('Position (m)', fontsize=12)
-        ax9.set_title('Local Position', fontsize=14, fontweight='bold')
-        ax9.set_xlim([0, max_time])
-        ax9.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
-        xticks = [t for t in ax9.get_xticks() if 0 <= t <= max_time]
+        fig9, (ax9_x, ax9_y, ax9_z) = plt.subplots(3, 1, figsize=(12, 10))
+        
+        # X position
+        ax9_x.plot(position['time'], position['position'][:, 0], 
+                  color='#C44569', linewidth=1.5)
+        ax9_x.set_ylabel('X Position (m)', fontsize=12)
+        ax9_x.set_title('Local Position (Mavros ENU Frame)', fontsize=14, fontweight='bold')
+        ax9_x.set_xlim([0, max_time])
+        ax9_x.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+        xticks = [t for t in ax9_x.get_xticks() if 0 <= t <= max_time]
         if max_time not in xticks:
             xticks.append(max_time)
-        ax9.set_xticks(sorted(xticks))
-        ax9.legend(fontsize=11)
-        ax9.grid(True, alpha=0.3)
+        ax9_x.set_xticks(sorted(xticks))
+        ax9_x.grid(True, alpha=0.3)
+        
+        # Y position
+        ax9_y.plot(position['time'], position['position'][:, 1], 
+                  color='#218C74', linewidth=1.5)
+        ax9_y.set_ylabel('Y Position (m)', fontsize=12)
+        ax9_y.set_xlim([0, max_time])
+        ax9_y.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+        ax9_y.set_xticks(sorted(xticks))
+        ax9_y.grid(True, alpha=0.3)
+        
+        # Z position
+        ax9_z.plot(position['time'], position['position'][:, 2], 
+                  color='#0652DD', linewidth=1.5)
+        ax9_z.set_xlabel('Time (s)', fontsize=12)
+        ax9_z.set_ylabel('Z Position (m)', fontsize=12)
+        ax9_z.set_xlim([0, max_time])
+        ax9_z.xaxis.set_major_locator(ticker.MaxNLocator(nbins=12))
+        ax9_z.set_xticks(sorted(xticks))
+        ax9_z.grid(True, alpha=0.3)
+        
         plt.tight_layout()
         output_path = os.path.join(results_dir, f'9_position_{timestamp}.png')
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
