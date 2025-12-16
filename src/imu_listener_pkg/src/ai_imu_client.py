@@ -160,6 +160,18 @@ class AIClient:
     def start_rosbag_recording(self) -> bool:
         """Start rosbag recording"""
         try:
+        #     # Wait for MAVROS to be ready and publishing pose data
+        #     print("Waiting for MAVROS position data before starting rosbag...")
+        #     rospy.loginfo("Waiting for /mavros/local_position/pose topic...")
+            
+            # try:
+        #         rospy.wait_for_message('/mavros/local_position/pose', rospy.AnyMsg, timeout=15.0)
+        #         print("✓ MAVROS position data detected")
+        #         rospy.loginfo("✓ MAVROS position topic is publishing")
+        #     except rospy.ROSException:
+        #         print("⚠ Warning: /mavros/local_position/pose not available, starting rosbag anyway")
+        #         rospy.logwarn("Position topic not available, recording will proceed without it")
+            
             script_dir = os.path.dirname(os.path.abspath(__file__))
             pkg_path = os.path.dirname(script_dir)
             bags_dir = os.path.join(pkg_path, 'bags')
