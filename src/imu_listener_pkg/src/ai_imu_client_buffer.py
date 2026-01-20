@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """
-AI IMU Subscriber and Feedback Client for PX4 TCP Pipeline
+AI IMU Subscriber and Feedback Client for PX4 TCP Pipeline (Buffered Version)
 
 This script:
 1. Connects to PX4 TCP publisher on port 14567
 2. Receives IMU samples from PX4
-3. Performs AI preprocessing/processing with ONNX model
-4. Sends processed samples back to PX4 on port 14568
+3. Maintains a rolling buffer of 100 samples for AI context
+4. Performs AI preprocessing/processing with ONNX model on full buffer
+5. Sends ONLY the latest corrected sample back to PX4 on port 14568
+
+Buffer Strategy:
+- Buffer is initialized with 100 zero samples
+- Each new IMU sample is added to the buffer (FIFO)
+- Oldest sample is removed when buffer is full
+- Entire buffer (100 samples) is fed to neural network for context
+- Only the latest corrected sample is sent back to PX4
 
 Architecture:
 - Client connects to PX4 TCP server on port 14567 (receives IMU data)
@@ -21,17 +29,12 @@ import time
 import signal
 import sys
 import os
-import subprocess
 import numpy as np
 from collections import deque
-from typing import Optional, Tuple
+from typing import Optional
 
-# ROS imports
-import rospy
-from sensor_msgs.msg import Imu
-
-# Import the inference module
-from realtime_imu_inference import RealtimeIMUInference
+# Import the buffered inference module
+from realtime_imu_inference_buffer import RealtimeIMUInference
 
 # Packet format: matches ImuUdpPacket structure in PX4
 # uint64_t timestamp_us      (8 bytes)
@@ -42,7 +45,7 @@ from realtime_imu_inference import RealtimeIMUInference
 # float delta_vel_dt         (4 bytes)
 # uint16_t crc16             (2 bytes)
 # Total: 46 bytes
-PACKET_FORMAT = '<QI3f3f2fH'  # Little-endian: Q=uint64, I=uint32, 3f=gyro, 3f=accel, 2f=deltas, H=uint16
+PACKET_FORMAT = '<QI3f3f2fH'  # Little-endian
 PACKET_SIZE = struct.calcsize(PACKET_FORMAT)
 
 # TCP connection settings
@@ -54,6 +57,9 @@ PX4_SUBSCRIBER_PORT = 14568
 # Processing settings
 STATS_INTERVAL_S = 1.0
 RECONNECT_DELAY_S = 1.0
+
+# Buffer settings
+BUFFER_SIZE = 200  # Number of samples to maintain for context
 
 
 class ImuSample:
@@ -82,41 +88,29 @@ class ImuSample:
                 f"accel=[{self.accel_x:.3f},{self.accel_y:.3f},{self.accel_z:.3f}])")
 
 
-class AIClient:
-    """AI IMU processing client"""
+class AIClientBuffer:
+    """AI IMU processing client with buffered inference"""
 
     def __init__(self):
         self.running = False
 
-        # Initialize ROS node - DISABLED for performance
-        # rospy.init_node('ai_imu_client', anonymous=True, disable_signals=True)
-        
-        # ROS Publishers for raw and corrected IMU data - DISABLED for performance
-        # self.pub_raw_imu = rospy.Publisher('/imu/raw', Imu, queue_size=100)
-        # self.pub_corrected_imu = rospy.Publisher('/imu/corrected', Imu, queue_size=100)
-        
-        # rospy.loginfo("ROS Publishers initialized:")
-        # rospy.loginfo("  - Raw IMU: /imu/raw")
-        # rospy.loginfo("  - Corrected IMU: /imu/corrected")
-        print("AI IMU Client initialized (ROS publishing DISABLED)")
+        print("AI IMU Client (Buffered) initialized")
 
         # TCP sockets
         self.rx_socket: Optional[socket.socket] = None
         self.tx_socket: Optional[socket.socket] = None
-        
-        # Rosbag recording process
-        self.rosbag_process: Optional[subprocess.Popen] = None
 
         # Statistics
         self.stats = {
             'samples_received': 0,
             'samples_processed': 0,
             'samples_sent': 0,
+            'samples_dropped': 0,  # Track dropped samples due to queue overflow
             'rx_errors': 0,
             'tx_errors': 0,
             'crc_failures': 0,
             'sequence_gaps': 0,
-            'corrupted_outputs': 0,  # Track NaN/Inf from model
+            'corrupted_outputs': 0,
             'last_sequence': None,
             'start_time': None,
             'last_stats_time': None,
@@ -125,119 +119,49 @@ class AIClient:
             'last_samples_processed': 0,
             'last_samples_sent': 0,
             # Timing measurements
-            'total_ai_time_ms': 0.0,  # Time spent in AI inference only
-            'total_pipeline_time_ms': 0.0,  # Time spent in RX + AI + TX
+            'total_ai_time_ms': 0.0,
+            'total_pipeline_time_ms': 0.0,
         }
 
-        # Processing queue
-        self.process_queue = deque(maxlen=1000)
+        # Processing queue (minimal - we process immediately, no batching)
+        # Queue only exists to decouple RX from processing slightly
+        self.process_queue = deque(maxlen=100)  # Small queue, process ASAP
 
         # Sample buffer for TCP recv
         self.rx_buffer = b''
-
-        # Get model path (use INT8 optimized model)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        pkg_path = os.path.dirname(script_dir)  # imu_listener_pkg root
         
-        # Try INT8 model first, fall back to FP32 if not available
-        model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_new.onnx")
-        # fp32_model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32.onnx")
-        
-        # if os.path.isfile(int8_model_path):
-        #     model_path = int8_model_path
-        #     print(f"Using INT8 quantized model: {model_path}")
-        # elif os.path.isfile(fp32_model_path):
-        #     model_path = fp32_model_path
-        #     print(f"INT8 model not found, using FP32 model: {model_path}")
-        # else:
-        #     raise FileNotFoundError(f"No model found at {int8_model_path} or {fp32_model_path}")
-
-        # Initialize inference module (INT8 handled automatically)
-        self.inference = RealtimeIMUInference(
-            model_path, 
-            verbose=False
-        )
-
-    def start_rosbag_recording(self) -> bool:
-        """Start rosbag recording"""
-        try:
-        #     # Wait for MAVROS to be ready and publishing pose data
-        #     print("Waiting for MAVROS position data before starting rosbag...")
-        #     rospy.loginfo("Waiting for /mavros/local_position/pose topic...")
-            
-            # try:
-        #         rospy.wait_for_message('/mavros/local_position/pose', rospy.AnyMsg, timeout=15.0)
-        #         print("✓ MAVROS position data detected")
-        #         rospy.loginfo("✓ MAVROS position topic is publishing")
-        #     except rospy.ROSException:
-        #         print("⚠ Warning: /mavros/local_position/pose not available, starting rosbag anyway")
-        #         rospy.logwarn("Position topic not available, recording will proceed without it")
-            
+        # Buffer logging
+        self.buffer_log_file = None
+        self.enable_buffer_logging = False  # DISABLED: Massive performance hit (375 KB/s disk I/O)
+        if self.enable_buffer_logging:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             pkg_path = os.path.dirname(script_dir)
-            bags_dir = os.path.join(pkg_path, 'bags')
-            os.makedirs(bags_dir, exist_ok=True)
-            
-            # Generate timestamped filename
-            timestamp = time.strftime('%Y-%m-%d-%H-%M-%S')
-            bag_file = os.path.join(bags_dir, f'imu_comparison_{timestamp}.bag')
-            
-            # Start rosbag record process
-            cmd = [
-                'rosbag', 'record',
-                '-O', bag_file,
-                '/imu/raw',
-                '/imu/corrected',
-                '/mavros/local_position/pose'
-            ]
-            
-            self.rosbag_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setsid  # Create new process group for clean shutdown
-            )
-            
-            print(f"Started rosbag recording: {bag_file}")
-            rospy.loginfo(f"Recording to: {bag_file}")
-            return True
-            
-        except Exception as e:
-            print(f"Failed to start rosbag recording: {e}")
-            rospy.logerr(f"Failed to start rosbag recording: {e}")
-            return False
-    
-    def stop_rosbag_recording(self):
-        """Stop rosbag recording gracefully"""
-        if self.rosbag_process:
-            try:
-                print("Stopping rosbag recording...")
-                rospy.loginfo("Stopping rosbag recording...")
-                
-                # Kill entire process group (handles child processes too)
-                try:
-                    os.killpg(os.getpgid(self.rosbag_process.pid), signal.SIGINT)
-                except ProcessLookupError:
-                    pass  # Process already dead
-                
-                # Wait for process to finish (with timeout)
-                try:
-                    self.rosbag_process.wait(timeout=5.0)
-                    print("Rosbag recording stopped successfully")
-                    rospy.loginfo("Rosbag recording stopped successfully")
-                except subprocess.TimeoutExpired:
-                    print("Rosbag process did not stop gracefully, forcing termination...")
-                    try:
-                        os.killpg(os.getpgid(self.rosbag_process.pid), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    self.rosbag_process.wait()
-                    
-            except Exception as e:
-                print(f"Error stopping rosbag: {e}")
-                rospy.logerr(f"Error stopping rosbag: {e}")
-            finally:
-                self.rosbag_process = None
+            logs_dir = os.path.join(pkg_path, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            log_path = os.path.join(logs_dir, f'buffer_log_{timestamp}.csv')
+            self.buffer_log_file = open(log_path, 'w')
+            self.buffer_log_file.write('timestamp_us,buffer_state\n')
+            print(f"Buffer logging enabled: {log_path}")
+
+        # Get model path
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        pkg_path = os.path.dirname(script_dir)
+        model_path = os.path.join(pkg_path, "models", "airimu_cpu_fp32_200.onnx")
+        
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f"Model not found: {model_path}")
+        
+        print(f"Using model: {model_path}")
+
+        # Initialize buffered inference module
+        self.inference = RealtimeIMUInference(
+            model_path, 
+            seqlen=BUFFER_SIZE,  # 100 samples buffer
+            verbose=False  # Disabled for performance
+        )
+        
+        print(f"Inference module initialized with buffer size: {BUFFER_SIZE}")
 
     def calculate_crc16(self, data: bytes) -> int:
         """Calculate CRC16-CCITT"""
@@ -254,14 +178,13 @@ class AIClient:
 
     def validate_packet(self, sample: ImuSample, raw_data: bytes) -> bool:
         """Validate packet CRC"""
-        # CRC covers all fields except crc16 itself
         crc_data = raw_data[:-2]
         calculated_crc = self.calculate_crc16(crc_data)
-
+        
         if calculated_crc != sample.crc16:
             self.stats['crc_failures'] += 1
             return False
-
+        
         return True
 
     def connect_rx(self) -> bool:
@@ -273,8 +196,6 @@ class AIClient:
 
             print(f"Connecting to PX4 publisher at {PX4_PUBLISHER_HOST}:{PX4_PUBLISHER_PORT}...")
             self.rx_socket.connect((PX4_PUBLISHER_HOST, PX4_PUBLISHER_PORT))
-
-            # Set to non-blocking after connect
             self.rx_socket.setblocking(False)
 
             print(f"Connected to PX4 publisher")
@@ -296,8 +217,6 @@ class AIClient:
 
             print(f"Connecting to PX4 subscriber at {PX4_SUBSCRIBER_HOST}:{PX4_SUBSCRIBER_PORT}...")
             self.tx_socket.connect((PX4_SUBSCRIBER_HOST, PX4_SUBSCRIBER_PORT))
-
-            # Set to non-blocking after connect
             self.tx_socket.setblocking(False)
 
             print(f"Connected to PX4 subscriber")
@@ -312,15 +231,18 @@ class AIClient:
 
     def disconnect(self):
         """Close all connections"""
-        # Stop rosbag recording first
-        # self.stop_rosbag_recording()  # DISABLED for performance
-        
         if self.rx_socket:
             self.rx_socket.close()
             self.rx_socket = None
         if self.tx_socket:
             self.tx_socket.close()
             self.tx_socket = None
+
+        # Close buffer log file
+        if self.buffer_log_file:
+            self.buffer_log_file.close()
+            self.buffer_log_file = None
+            print("Buffer log file closed")
 
         # Close inference module
         if hasattr(self, 'inference'):
@@ -340,7 +262,6 @@ class AIClient:
             while True:
                 chunk = self.rx_socket.recv(4096)
                 if not chunk:
-                    # Connection closed
                     print("PX4 publisher closed connection")
                     self.disconnect()
                     return samples_received
@@ -356,11 +277,6 @@ class AIClient:
                     values = struct.unpack(PACKET_FORMAT, packet_data)
                     sample = ImuSample(*values)
 
-                    # Validate CRC - DISABLED for performance (TCP already has checksums)
-                    # if not self.validate_packet(sample, packet_data):
-                    #     self.stats['rx_errors'] += 1
-                    #     continue
-
                     # Check sequence
                     if self.stats['last_sequence'] is not None:
                         expected_seq = (self.stats['last_sequence'] + 1) & 0xFFFFFFFF
@@ -373,13 +289,13 @@ class AIClient:
                     samples_received += 1
 
                     # Log first few samples
-                    if self.stats['samples_received'] <= 4:
+                    if self.stats['samples_received'] <= 3:
                         print(f"RX Sample {self.stats['samples_received']}: {sample}")
 
-                    # Publish raw IMU data to ROS - DISABLED for performance
-                    # self.publish_raw_imu(sample)
-
                     # Add to processing queue
+                    # Check if queue is full (will drop oldest)
+                    if len(self.process_queue) >= self.process_queue.maxlen:
+                        self.stats['samples_dropped'] += 1
                     self.process_queue.append(sample)
 
         except BlockingIOError:
@@ -392,60 +308,28 @@ class AIClient:
 
         return samples_received
 
-    def publish_raw_imu(self, sample: ImuSample):
-        """Publish raw IMU data to ROS topic"""
-        try:
-            imu_msg = Imu()
-            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
-            imu_msg.header.frame_id = "imu_raw"
-            
-            # Angular velocity (gyro)
-            imu_msg.angular_velocity.x = sample.gyro_x
-            imu_msg.angular_velocity.y = sample.gyro_y
-            imu_msg.angular_velocity.z = sample.gyro_z
-            
-            # Linear acceleration
-            imu_msg.linear_acceleration.x = sample.accel_x
-            imu_msg.linear_acceleration.y = sample.accel_y
-            imu_msg.linear_acceleration.z = sample.accel_z
-            
-            self.pub_raw_imu.publish(imu_msg)
-        except Exception as e:
-            rospy.logwarn(f"Failed to publish raw IMU: {e}")
-
-    def publish_corrected_imu(self, sample: ImuSample):
-        """Publish corrected IMU data to ROS topic"""
-        try:
-            imu_msg = Imu()
-            imu_msg.header.stamp = rospy.Time.from_sec(sample.timestamp_us / 1e6)
-            imu_msg.header.frame_id = "imu_corrected"
-            
-            # Angular velocity (gyro)
-            imu_msg.angular_velocity.x = sample.gyro_x
-            imu_msg.angular_velocity.y = sample.gyro_y
-            imu_msg.angular_velocity.z = sample.gyro_z
-            
-            # Linear acceleration
-            imu_msg.linear_acceleration.x = sample.accel_x
-            imu_msg.linear_acceleration.y = sample.accel_y
-            imu_msg.linear_acceleration.z = sample.accel_z
-            
-            self.pub_corrected_imu.publish(imu_msg)
-        except Exception as e:
-            rospy.logwarn(f"Failed to publish corrected IMU: {e}")
-
-    def process_sample(self, sample: ImuSample) -> ImuSample:
+    def process_sample(self, sample: ImuSample) -> Optional[ImuSample]:
         """
-        AI processing of IMU sample using ONNX model.
+        AI processing of IMU sample using buffered ONNX inference.
+        
+        IMPORTANT: This function processes EVERY incoming sample immediately!
+        - Buffer state: Initially 99 zeros + 1 real sample, then 98 zeros + 2 real samples, etc.
+        - The buffer is ALWAYS fed to the NN (even when mostly zeros)
+        - Only the latest corrected sample is returned and sent to PX4
+        - This ensures 1:1 RX to TX sample ratio (no waiting for buffer to fill)
+        
+        Timeline:
+        t1:  Buffer = [0, 0, ..., 0, imu1]     → Process → Send corrected_imu1
+        t2:  Buffer = [0, 0, ..., imu1, imu2]  → Process → Send corrected_imu2
+        ...
+        t100: Buffer = [imu1, imu2, ..., imu100] → Process → Send corrected_imu100
 
         Args:
             sample: Input IMU sample from PX4
 
         Returns:
-            Processed IMU sample with corrections applied
+            Processed IMU sample with corrections applied (only latest sample)
         """
-        ai_start_time = time.time()
-        
         try:
             # Extract IMU data
             input_acc = np.array([sample.accel_x, sample.accel_y, sample.accel_z], dtype=np.float32)
@@ -453,26 +337,32 @@ class AIClient:
 
             # Validate input data
             if not (np.isfinite(input_acc).all() and np.isfinite(input_gyro).all()):
-                print(f"[AI Client] WARNING: Invalid input data, passing through unchanged")
-                return sample
+                print(f"[AI Client] WARNING: Invalid input data, skipping")
+                return None
 
-            # Run inference (measure this specifically)
+            # Run buffered inference
+            # This adds the sample to the buffer and runs inference on the full buffer
+            # Returns only the corrected value for the latest sample
             inference_start = time.time()
             corrected_acc, corrected_gyro = self.inference.inference_airimu(input_acc, input_gyro)
             ai_time_ms = (time.time() - inference_start) * 1000
             self.stats['total_ai_time_ms'] += ai_time_ms
+            
+            # Log buffer state if enabled
+            if self.buffer_log_file:
+                self.log_buffer_state(sample.timestamp_us)
 
-            # Validate output data (CRITICAL: check for NaN/Inf corruption)
+            # Validate output data
             if not (np.isfinite(corrected_acc).all() and np.isfinite(corrected_gyro).all()):
-                print(f"[AI Client] ERROR: Model produced invalid output (NaN/Inf), passing through original")
+                print(f"[AI Client] ERROR: Model produced invalid output (NaN/Inf)")
                 print(f"  Input acc: {input_acc}")
                 print(f"  Input gyro: {input_gyro}")
                 print(f"  Output acc: {corrected_acc}")
                 print(f"  Output gyro: {corrected_gyro}")
                 self.stats['corrupted_outputs'] += 1
-                return sample
+                return None
 
-            # Create corrected sample
+            # Create corrected sample (only for the latest input)
             processed = ImuSample(
                 timestamp_us=sample.timestamp_us,
                 sequence=sample.sequence,
@@ -493,8 +383,33 @@ class AIClient:
             print(f"[AI Client] Error processing sample: {e}")
             import traceback
             traceback.print_exc()
-            # On error, pass through unchanged
-            return sample
+            return None
+
+    def log_buffer_state(self, timestamp_us: int):
+        """
+        Log the current buffer state to CSV file.
+        
+        Args:
+            timestamp_us: Timestamp in microseconds
+        """
+        try:
+            # Get current buffer state
+            buffer = self.inference.buffer
+            acc_buf = buffer.acc_buf
+            gyro_buf = buffer.gyro_buf
+            
+            # Format buffer as string: flatten and concatenate accel and gyro
+            # Format: [acc0_x,acc0_y,acc0_z,...,acc99_x,acc99_y,acc99_z,gyro0_x,gyro0_y,gyro0_z,...,gyro99_x,gyro99_y,gyro99_z]
+            acc_flat = acc_buf.flatten()
+            gyro_flat = gyro_buf.flatten()
+            buffer_array = np.concatenate([acc_flat, gyro_flat])
+            buffer_str = '[' + ','.join([f'{v:.6f}' for v in buffer_array]) + ']'
+            
+            # Write to CSV
+            self.buffer_log_file.write(f'{timestamp_us},"{buffer_str}"\n')
+            
+        except Exception as e:
+            print(f"[AI Client] Error logging buffer state: {e}")
 
     def send_sample(self, sample: ImuSample) -> bool:
         """Send processed sample back to PX4"""
@@ -502,7 +417,7 @@ class AIClient:
             return False
 
         try:
-            # CRITICAL: Validate all float values before sending to PX4
+            # Validate all float values before sending
             values_to_check = [
                 sample.gyro_x, sample.gyro_y, sample.gyro_z,
                 sample.accel_x, sample.accel_y, sample.accel_z,
@@ -511,14 +426,12 @@ class AIClient:
             
             if not all(np.isfinite(v) for v in values_to_check):
                 print(f"[AI Client] ERROR: Attempting to send corrupted data to PX4! Dropping sample.")
-                print(f"  Sample: {sample}")
                 self.stats['tx_errors'] += 1
                 return False
 
-            # Pack sample into binary format (must match C++ ImuUdpPacket structure)
-            # First pack without CRC to calculate it
+            # Pack sample into binary format
             packet_data_no_crc = struct.pack(
-                '<QI3f3f2f',  # All fields except CRC
+                '<QI3f3f2f',
                 sample.timestamp_us,
                 sample.sequence,
                 sample.gyro_x, sample.gyro_y, sample.gyro_z,
@@ -527,19 +440,17 @@ class AIClient:
                 sample.delta_vel_dt
             )
 
-            # Calculate CRC for the modified data
+            # Calculate CRC
             new_crc = self.calculate_crc16(packet_data_no_crc)
-
-            # Now pack the complete packet with the new CRC
             packet_data = packet_data_no_crc + struct.pack('<H', new_crc)
 
-            # Send (TCP handles partial sends automatically)
+            # Send
             self.tx_socket.sendall(packet_data)
             self.stats['samples_sent'] += 1
-            self.stats['samples_processed'] += 1  # Count complete pipeline: RX + AI + TX
+            self.stats['samples_processed'] += 1
 
             # Log first few samples
-            if self.stats['samples_sent'] <= 4:
+            if self.stats['samples_sent'] <= 3:
                 print(f"TX Sample {self.stats['samples_sent']}: {sample} (CRC: {new_crc:04X})")
 
             return True
@@ -551,29 +462,30 @@ class AIClient:
             return False
 
     def process_queue_samples(self) -> int:
-        """Process samples from queue and send back to PX4"""
+        """
+        Process ALL samples from queue and send back to PX4.
+        
+        This processes every sample immediately - no batching or waiting!
+        Each incoming IMU sample triggers one inference and one TX.
+        """
         processed_count = 0
 
         while self.process_queue:
-            # Measure complete pipeline time: receive + AI + transmit
-            pipeline_start_time = time.time()
-            
             sample = self.process_queue.popleft()
 
-            # AI processing
+            # AI processing with buffering
+            # This will add sample to buffer and run inference immediately
             processed_sample = self.process_sample(sample)
+            
+            if processed_sample is None:
+                # Skip if processing failed (but this shouldn't happen often)
+                continue
 
-            # Publish corrected IMU data to ROS - DISABLED for performance
-            # self.publish_corrected_imu(processed_sample)
-
-            # Send back to PX4
+            # Send back to PX4 immediately
             if self.send_sample(processed_sample):
-                # Measure total pipeline time (queuing + AI + TX)
-                pipeline_time_ms = (time.time() - pipeline_start_time) * 1000
-                self.stats['total_pipeline_time_ms'] += pipeline_time_ms
                 processed_count += 1
             else:
-                # TX error, stop processing and try to reconnect
+                # TX error, stop processing
                 break
 
         return processed_count
@@ -587,53 +499,53 @@ class AIClient:
 
         uptime = now - self.stats['start_time']
         
-        # Use actual elapsed time since last stats print for interval calculation
         if self.stats['last_stats_time'] is not None:
             interval = now - self.stats['last_stats_time']
         else:
             interval = uptime
 
-        # Calculate instantaneous rates (samples per second during this interval)
+        # Calculate instantaneous rates
         rx_interval = self.stats['samples_received'] - self.stats['last_samples_received']
         tx_interval = self.stats['samples_sent'] - self.stats['last_samples_sent']
         processed_interval = self.stats['samples_processed'] - self.stats['last_samples_processed']
         
-        # Calculate instantaneous rates - use actual measured interval
         rx_rate_instant = rx_interval / interval if interval > 0 else 0
         tx_rate_instant = tx_interval / interval if interval > 0 else 0
         processed_rate_instant = processed_interval / interval if interval > 0 else 0
 
-        # Calculate average rates (since start) - most reliable metric
+        # Calculate average rates
         rx_rate_avg = self.stats['samples_received'] / uptime if uptime > 0 else 0
         tx_rate_avg = self.stats['samples_sent'] / uptime if uptime > 0 else 0
         processed_rate_avg = self.stats['samples_processed'] / uptime if uptime > 0 else 0
 
         print(f"\n{'='*80}")
-        print(f"\nErrors & Status:")
-        print(f"  Queue depth: {len(self.process_queue)}")
-        print(f"  RX errors: {self.stats['rx_errors']}")
-        print(f"  TX errors: {self.stats['tx_errors']}")
-        print(f"  CRC failures: {self.stats['crc_failures']}")
-        print(f"  Sequence gaps: {self.stats['sequence_gaps']}")
-        print(f"  Corrupted outputs: {self.stats['corrupted_outputs']}")
-        print(f"  Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
-
-        print(f"\nAI Client Statistics")
+        print(f"AI Client Statistics (Buffered Inference)")
         print(f"{'='*80}")
         print(f"Runtime: {uptime:.1f}s (last interval: {interval:.3f}s)")
+        
+        # Buffer status
+        buffer_stats = self.inference.get_statistics()
+        print(f"\nBuffer Status:")
+        print(f"  Buffer fill: {self.inference.buffer.get_fill_percentage():.1f}%")
+        print(f"  Samples in buffer: {min(self.inference.buffer.sample_count, BUFFER_SIZE)}/{BUFFER_SIZE}")
+        print(f"  Queue depth: {len(self.process_queue)} (should be near 0 - processing immediately)")
+        
         print(f"\nAI Model Inference Timing:")
-        if hasattr(self, 'inference'):
-            inference_stats = self.inference.get_statistics()
-            print(f"  Total inferences: {inference_stats['inference_count']}")
-            print(f"  Avg inference time: {inference_stats['avg_inference_time_ms']:.3f} ms/sample")
-            print(f"  Max inference time: {inference_stats['max_inference_time_ms']:.3f} ms/sample")
+        print(f"  Total inferences: {buffer_stats['inference_count']}")
+        print(f"  Avg inference time: {buffer_stats['avg_inference_time_ms']:.3f} ms/sample")
+        print(f"  Max inference time: {buffer_stats['max_inference_time_ms']:.3f} ms/sample")
         
         print(f"\nThroughput:")
-        print(f"  RX:        {self.stats['samples_received']} samples | Avg: {rx_rate_avg:.1f} Hz | Current: {rx_rate_instant:.1f} Hz ({rx_interval} samples)")
-        print(f"  TX:        {self.stats['samples_sent']} samples | Avg: {tx_rate_avg:.1f} Hz | Current: {tx_rate_instant:.1f} Hz ({tx_interval} samples)")
-        print(f"  Processed: {self.stats['samples_processed']} samples | Avg: {processed_rate_avg:.1f} Hz | Current: {processed_rate_instant:.1f} Hz ({processed_interval} samples)")
+        print(f"  RX:        {self.stats['samples_received']} samples | Avg: {rx_rate_avg:.1f} Hz | Current: {rx_rate_instant:.1f} Hz")
+        print(f"  TX:        {self.stats['samples_sent']} samples | Avg: {tx_rate_avg:.1f} Hz | Current: {tx_rate_instant:.1f} Hz")
+        print(f"  Processed: {self.stats['samples_processed']} samples | Avg: {processed_rate_avg:.1f} Hz | Current: {processed_rate_instant:.1f} Hz")
         
-        # Calculate timing averages
+        # Check for RX/TX mismatch
+        rx_tx_diff = self.stats['samples_received'] - self.stats['samples_sent']
+        if abs(rx_tx_diff) > 10:
+            print(f"  ⚠ WARNING: RX/TX mismatch of {rx_tx_diff} samples (should be ~0 for immediate processing)")
+        
+        # Timing averages
         if self.stats['samples_processed'] > 0:
             avg_ai_time = self.stats['total_ai_time_ms'] / self.stats['samples_processed']
             avg_pipeline_time = self.stats['total_pipeline_time_ms'] / self.stats['samples_processed']
@@ -643,9 +555,17 @@ class AIClient:
             print(f"  Total pipeline (RX+AI+TX): {avg_pipeline_time:.3f} ms")
             print(f"  Overhead (RX+TX+queue): {overhead_time:.3f} ms")
 
+        print(f"\nErrors & Status:")
+        print(f"  Queue depth: {len(self.process_queue)} (max: {self.process_queue.maxlen})")
+        print(f"  Samples DROPPED: {self.stats['samples_dropped']} ⚠ (inference too slow!)")
+        print(f"  RX errors: {self.stats['rx_errors']}")
+        print(f"  TX errors: {self.stats['tx_errors']}")
+        print(f"  Sequence gaps: {self.stats['sequence_gaps']}")
+        print(f"  Corrupted outputs: {self.stats['corrupted_outputs']}")
+        print(f"  Connected: RX={self.rx_socket is not None}, TX={self.tx_socket is not None}")
         print(f"{'='*80}\n")
 
-        # Update counters for next interval
+        # Update counters
         self.stats['last_samples_received'] = self.stats['samples_received']
         self.stats['last_samples_processed'] = self.stats['samples_processed']
         self.stats['last_samples_sent'] = self.stats['samples_sent']
@@ -657,10 +577,9 @@ class AIClient:
         self.stats['start_time'] = time.time()
         self.stats['last_stats_time'] = self.stats['start_time']
 
-        print("AI IMU Client starting...")
-        
-        # Start rosbag recording
-        # self.start_rosbag_recording()  # DISABLED for performance
+        print("AI IMU Client (Buffered) starting...")
+        print(f"Buffer configuration: {BUFFER_SIZE} samples for context")
+        print("Note: Buffer starts with zeros, fills progressively with real data")
 
         while self.running:
             # Ensure connections are established
@@ -686,7 +605,7 @@ class AIClient:
                 self.print_statistics()
 
         self.disconnect()
-        print("AI IMU Client stopped")
+        print("AI IMU Client (Buffered) stopped")
 
 
 def signal_handler(sig, frame):
@@ -700,7 +619,7 @@ def signal_handler(sig, frame):
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
 
-    client = AIClient()
+    client = AIClientBuffer()
 
     try:
         client.run()

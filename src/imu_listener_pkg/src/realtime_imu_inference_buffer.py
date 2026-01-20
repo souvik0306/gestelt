@@ -42,13 +42,14 @@ class PaddingGenerator:
     - gyro: zeros (stationary)
     """
 
-    def __init__(self, interval: int = 9, gravity: float = 9.81007):
+    def __init__(self, interval: int = 9, gravity: float = 9.81007, max_seqlen: int = 500):
         """
-        Initialize padding generator.
+        Initialize padding generator with pre-allocated output buffer.
 
         Args:
             interval: Number of padding frames to generate
             gravity: Gravity magnitude in m/s^2
+            max_seqlen: Maximum sequence length (for buffer pre-allocation)
         """
         self.interval = interval
         self.gravity = np.array([0.0, 0.0, gravity], dtype=np.float32)
@@ -56,10 +57,20 @@ class PaddingGenerator:
         # Pre-generate padding arrays for efficiency
         self.pad_acc = np.tile(self.gravity, (self.interval, 1))
         self.pad_gyro = np.zeros((self.interval, 3), dtype=np.float32)
+        
+        # Pre-allocate output buffers to avoid vstack allocation
+        total_len = interval + max_seqlen
+        self.acc_padded_buf = np.zeros((total_len, 3), dtype=np.float32)
+        self.gyro_padded_buf = np.zeros((total_len, 3), dtype=np.float32)
+        # Copy padding to start of buffer once
+        self.acc_padded_buf[:interval] = self.pad_acc
+        self.gyro_padded_buf[:interval] = self.pad_gyro
 
     def generate(self, acc_samples: np.ndarray, gyro_samples: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Generate padding and concatenate with real samples.
+        Generate padding and concatenate with real samples using pre-allocated buffer.
+        
+        Avoids vstack allocation by copying into pre-allocated array.
 
         Args:
             acc_samples: [N, 3] real accelerometer data
@@ -68,61 +79,103 @@ class PaddingGenerator:
         Returns:
             Tuple of (acc_padded, gyro_padded), each [N+interval, 3]
         """
-        # Concatenate: [padding] + [real data]
-        acc_padded = np.vstack([self.pad_acc, acc_samples])
-        gyro_padded = np.vstack([self.pad_gyro, gyro_samples])
-
-        return acc_padded, gyro_padded
+        N = acc_samples.shape[0]
+        total_len = self.interval + N
+        
+        # Copy real samples after padding (padding already in buffer)
+        self.acc_padded_buf[self.interval:total_len] = acc_samples
+        self.gyro_padded_buf[self.interval:total_len] = gyro_samples
+        
+        # Return view of used portion
+        return self.acc_padded_buf[:total_len], self.gyro_padded_buf[:total_len]
 
 
 class IMUBuffer:
     """
-    Circular buffer for accumulating IMU samples before inference.
+    Efficient circular buffer for IMU samples using ring buffer design.
 
-    Accumulates SEQLEN samples before triggering inference.
+    Uses a head pointer to track newest sample position, eliminating expensive shifts.
+    Maintains a rolling window of SEQLEN samples, initialized with zeros.
+    
+    Timeline:
+    - Samples 1-99: Buffer partially filled with zeros at start
+    - Sample 100: Buffer FULLY filled with real data (ready() returns True from now on)
+    - Sample 101+: Rolling FIFO, oldest sample overwritten by newest
     """
 
     def __init__(self, seqlen: int):
         """
-        Initialize buffer.
+        Initialize circular buffer with zeros.
 
         Args:
-            seqlen: Number of samples to accumulate before inference
+            seqlen: Fixed buffer size (e.g., 250 samples)
         """
         self.seqlen = seqlen
-        self.acc_buf = deque(maxlen=seqlen)
-        self.gyro_buf = deque(maxlen=seqlen)
+        # Initialize with zeros: [seqlen, 3]
+        self.acc_buf = np.zeros((seqlen, 3), dtype=np.float32)
+        self.gyro_buf = np.zeros((seqlen, 3), dtype=np.float32)
+        self.head = 0  # Index of next write position (circular)
+        self.sample_count = 0  # Track how many real samples we've received
+        
+        # Pre-allocate linearization buffer to avoid vstack allocations
+        self.acc_linear = np.zeros((seqlen, 3), dtype=np.float32)
+        self.gyro_linear = np.zeros((seqlen, 3), dtype=np.float32)
 
     def add(self, acc: np.ndarray, gyro: np.ndarray):
         """
-        Add new IMU sample to buffer.
+        Add new IMU sample to circular buffer (O(1) operation).
+        
+        Overwrites the oldest sample position with newest data.
+        No memory copying or shifting required.
 
         Args:
             acc: [3] acceleration vector
             gyro: [3] gyroscope vector
         """
-        self.acc_buf.append(acc)
-        self.gyro_buf.append(gyro)
+        # Write to current head position
+        self.acc_buf[self.head] = acc
+        self.gyro_buf[self.head] = gyro
+        
+        # Advance head pointer (circular wrap)
+        self.head = (self.head + 1) % self.seqlen
+        self.sample_count += 1
+
+    def is_filled(self) -> bool:
+        """Check if buffer has received all 100 real samples (initial fill complete)."""
+        return self.sample_count >= self.seqlen
 
     def ready(self) -> bool:
-        """Check if buffer has enough samples for inference."""
-        return len(self.acc_buf) >= self.seqlen
+        """Always ready since buffer is always available (with zeros initially)."""
+        return True
 
     def get_arrays(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Get buffered data as numpy arrays.
+        Get buffered data as linearized numpy arrays in chronological order.
+        
+        Reorders circular buffer so oldest sample is at index 0, newest at index -1.
+        This is required for correct temporal ordering in the neural network.
 
         Returns:
-            Tuple of (acc, gyro), each [N, 3]
+            Tuple of (acc, gyro), each [seqlen, 3] in chronological order
         """
-        acc = np.array(self.acc_buf, dtype=np.float32)
-        gyro = np.array(self.gyro_buf, dtype=np.float32)
-        return acc, gyro
+        # Linearize circular buffer using pre-allocated buffer (avoids vstack allocation)
+        if self.sample_count >= self.seqlen:
+            # Buffer is full - reorder from head to create chronological sequence
+            # Copy in two chunks: [head:end] then [0:head]
+            tail_len = self.seqlen - self.head
+            self.acc_linear[:tail_len] = self.acc_buf[self.head:]
+            self.acc_linear[tail_len:] = self.acc_buf[:self.head]
+            self.gyro_linear[:tail_len] = self.gyro_buf[self.head:]
+            self.gyro_linear[tail_len:] = self.gyro_buf[:self.head]
+            
+            return self.acc_linear, self.gyro_linear
+        else:
+            # Buffer not full yet - samples are already in order [0:head]
+            return self.acc_buf, self.gyro_buf
 
-    def clear(self):
-        """Clear buffer after inference."""
-        self.acc_buf.clear()
-        self.gyro_buf.clear()
+    def get_fill_percentage(self) -> float:
+        """Get percentage of buffer filled with real samples."""
+        return min(100.0, (self.sample_count / self.seqlen) * 100.0)
 
 
 class RealtimeIMUInference:
@@ -139,7 +192,7 @@ class RealtimeIMUInference:
     def __init__(self,
                  model_path: str,
                  log_path: Optional[str] = None,
-                 seqlen: int = 1,
+                 seqlen: int = 250,
                  interval: int = 9,
                  gravity: float = 9.81007,
                  verbose: bool = False):
@@ -149,7 +202,7 @@ class RealtimeIMUInference:
         Args:
             model_path: Path to ONNX model file
             log_path: Optional path to log file for debugging
-            seqlen: Number of real samples per inference window
+            seqlen: Fixed buffer size (default: 100 samples)
             interval: Number of padding frames (must match model training)
             gravity: Gravity magnitude in m/s^2
             verbose: Enable verbose logging
@@ -161,7 +214,7 @@ class RealtimeIMUInference:
 
         # Components
         self.buffer = IMUBuffer(seqlen)
-        self.padding_gen = PaddingGenerator(interval, gravity)
+        self.padding_gen = PaddingGenerator(interval, gravity, max_seqlen=seqlen)
         self.onnx_session = None
 
         # Statistics
@@ -254,9 +307,9 @@ class RealtimeIMUInference:
         self.total_inference_time_ms += inference_time_ms
         self.max_inference_time_ms = max(self.max_inference_time_ms, inference_time_ms)
 
-        # Warn if inference is too slow (>5ms is risky for 250Hz IMU)
-        if inference_time_ms > 5.0 and self.verbose:
-            print(f"[WARNING] Slow inference: {inference_time_ms:.2f}ms")
+        # # Warn if inference is too slow (>5ms is risky for 250Hz IMU)
+        # if inference_time_ms > 5.0 and self.verbose:
+        #     print(f"[WARNING] Slow inference: {inference_time_ms:.2f}ms")
 
         return corrected_acc, corrected_gyro
 
@@ -264,41 +317,44 @@ class RealtimeIMUInference:
                         acc: np.ndarray,
                         gyro: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Process IMU sample and return corrected values.
+        Process IMU sample and return corrected value for ONLY the latest sample.
+        
+        Pipeline:
+        1. Add incoming sample to 100-sample buffer (FIFO)
+        2. Get full buffer (initially: 99 zeros + samples, eventually: 100 real samples)
+        3. Run inference on entire buffer with padding (adds 9 padding frames)
+        4. Return ONLY the last corrected sample (the one corresponding to the input)
+        
+        This way:
+        - Neural network always has full 100-sample context
+        - But we only return the correction for the latest sample
+        - PX4 gets a 1:1 input:output ratio
 
         Args:
             acc: [3] acceleration vector (m/s^2)
             gyro: [3] gyroscope vector (rad/s)
 
         Returns:
-            Tuple of (corrected_acc, corrected_gyro), each [3]
+            Tuple of (corrected_acc, corrected_gyro), each [3] - only the latest value
         """
         # Ensure inputs are numpy arrays with correct shape
         acc = np.asarray(acc, dtype=np.float32).reshape(3)
         gyro = np.asarray(gyro, dtype=np.float32).reshape(3)
 
-        # Add to buffer
+        # Add to buffer (FIFO - shifts old samples out)
         self.buffer.add(acc, gyro)
 
-        # Check if ready for inference
-        if self.buffer.ready():
-            # Get buffered data
-            acc_batch, gyro_batch = self.buffer.get_arrays()
+        # Get full buffer (always 100 samples, padded with zeros initially)
+        acc_batch, gyro_batch = self.buffer.get_arrays()
 
-            # Run inference
-            corrected_acc_batch, corrected_gyro_batch = self._run_inference(
-                acc_batch, gyro_batch
-            )
+        # Run inference on full buffer
+        corrected_acc_batch, corrected_gyro_batch = self._run_inference(
+            acc_batch, gyro_batch
+        )
 
-            # Clear buffer
-            self.buffer.clear()
-
-            # Return the last sample from the batch (most recent)
-            return corrected_acc_batch[-1], corrected_gyro_batch[-1]
-
-        else:
-            # Not enough samples yet, return original (pass-through)
-            return acc, gyro
+        # Return ONLY the last sample from the batch (most recent)
+        # This is the corrected value for the sample we just added
+        return corrected_acc_batch[-1], corrected_gyro_batch[-1]
 
     def get_statistics(self) -> dict:
         """

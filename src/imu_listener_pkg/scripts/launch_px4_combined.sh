@@ -1,44 +1,37 @@
 #!/bin/bash
 
 SESSION="px4_sim"
-PX4_ROOT="${PX4_ROOT:-$HOME/Ai_imu_ws/PX4-Autopilot/}"
-PX4_LAUNCH_CMD="${PX4_LAUNCH_CMD:-make px4_sitl gazebo}"
-AI_CLIENT_PATH="$HOME/Ai_imu_ws/gestelt/src/imu_listener_pkg/src/ai_imu_client.py"
+# AI_CLIENT_PATH="$HOME/Ai_imu_ws1/src/gestelt/imu_listener_pkg/src/ai_imu_client.py"
+AI_CLIENT_PATH="$HOME/Ai_imu_ws1/src/gestelt/imu_listener_pkg/src/loopback_imu_client.py"
 
-# Verify paths
-[ ! -f "$AI_CLIENT_PATH" ] && echo "[ERROR] AI client not found: $AI_CLIENT_PATH" && exit 1
-[ ! -d "$PX4_ROOT" ] && echo "[ERROR] PX4 directory not found: $PX4_ROOT" && exit 1
+SCRIPT_DIR="$HOME/Ai_imu_ws1/src/gestelt/gestelt_bringup"
+PX4_DIR="$HOME/Ai_imu_ws1/PX4-Autopilot"
 
-# Kill existing session
-tmux has-session -t "$SESSION" 2>/dev/null && tmux kill-session -t "$SESSION"
+# Kill existing sessions
+tmux kill-session -t "$SESSION" 2>/dev/null
+tmux kill-session -t "gz_sim_single_uav" 2>/dev/null
 
-# Create session
-tmux new-session -d -s "$SESSION"
-tmux split-window -h -p 80 -t "$SESSION":0
+# Create session with 5 equal panes
+tmux new-session -d -s "gz_sim_single_uav"
+tmux split-window -t "gz_sim_single_uav":0.0 -h
+tmux split-window -t "gz_sim_single_uav":0.0 -h
+tmux split-window -t "gz_sim_single_uav":0.0 -h
+tmux split-window -t "gz_sim_single_uav":0.0 -h
+tmux select-layout -t "gz_sim_single_uav" tiled
 
-# Pane 0: PX4 SITL + Gazebo (waits for model)
-tmux select-pane -t "$SESSION":0.0 -T "PX4 SITL + Gazebo"
-tmux send-keys -t "$SESSION":0.0 "sleep 5 && cd $PX4_ROOT && $PX4_LAUNCH_CMD" C-m
+tmux select-pane -t "gz_sim_single_uav":0.0 -T "AI Client"
+tmux select-pane -t "gz_sim_single_uav":0.1 -T "Gazebo+PX4"
+tmux select-pane -t "gz_sim_single_uav":0.2 -T "Trajectory Server"
+tmux select-pane -t "gz_sim_single_uav":0.3 -T "Planner"
+tmux select-pane -t "gz_sim_single_uav":0.4 -T "Mission"
 
-# Pane 1: AI IMU Client (loads model first)
-tmux select-pane -t "$SESSION":0.1 -T "AI IMU Client"
-tmux send-keys -t "$SESSION":0.1 "python3 $AI_CLIENT_PATH" C-m
-
-# Pane 2: QGroundControl
-tmux split-window -v -t "$SESSION":0.1
-tmux select-pane -t "$SESSION":0.2 -T "QGroundControl"
-tmux send-keys -t "$SESSION":0.2 "cd ~/Downloads && ./QGroundControl.AppImage" C-m
-
-# Pane 3: MAVROS (waits for PX4)
-tmux split-window -v -t "$SESSION":0.2
-tmux select-pane -t "$SESSION":0.3 -T "MAVROS"
-tmux send-keys -t "$SESSION":0.3 "sleep 8 && source /opt/ros/noetic/setup.bash && roslaunch mavros px4.launch fcu_url:=udp://:14540@localhost:14580 fcu_protocol:=v2.0" C-m
-
-# Note: Rosbag recording is now automatic - starts/stops with AI client for perfect time alignment
-
-# Set pane borders
 tmux set-option -g pane-border-status top
 tmux set-option -g pane-border-format "#{pane_index}: #{pane_title}"
 
-# Attach
-tmux attach -t "$SESSION"
+# Attach and launch all panes
+tmux attach -t "gz_sim_single_uav" \; \
+  send-keys -t 0 "python3 $AI_CLIENT_PATH" C-m \; \
+  send-keys -t 1 "sleep 4 && source $PX4_DIR/Tools/setup_gazebo.bash $PX4_DIR $PX4_DIR/build/px4_sitl_default && export ROS_PACKAGE_PATH=\$ROS_PACKAGE_PATH:$SCRIPT_DIR:$PX4_DIR:$PX4_DIR/Tools/sitl_gazebo && export GAZEBO_MODEL_PATH=\$GAZEBO_MODEL_PATH:$SCRIPT_DIR/simulation/models && export GAZEBO_RESOURCE_PATH=\$GAZEBO_RESOURCE_PATH:$SCRIPT_DIR/simulation && roslaunch gestelt_bringup sitl_drone.launch gui:=true" C-m \; \
+  send-keys -t 2 "sleep 2 && source $HOME/Ai_imu_ws1/devel/setup.bash && roslaunch trajectory_server trajectory_server_node.launch rviz_config:=gz_sim" C-m \; \
+  send-keys -t 3 "sleep 15 && source $HOME/Ai_imu_ws1/devel/setup.bash && roslaunch trajectory_planner trajectory_planner_node.launch" C-m \; \
+  send-keys -t 4 "sleep 50 & source $HOME/Ai_imu_ws1/devel/setup.bash && roslaunch gestelt_bringup demo_trajectory_mission.launch" C-m
