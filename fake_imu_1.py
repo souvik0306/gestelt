@@ -5,53 +5,75 @@ import onnxruntime as ort
 import pickle
 import os
 import rospkg
+from collections import deque
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Header
 import sys
 
 # --- configuration ---
-SEQLEN   = 50        # Number of IMU samples per inference window
-INTERVAL = 9          # Interval between inference windows
-OVERLAP  = INTERVAL + 1  # Number of samples kept between windows for overlap
+WINDOW_SIZE = 100  # Number of IMU samples collected before triggering inference
+STEP_SIZE   = 2    # Number of samples the sliding window advances between inferences
+# The ONNX network was trained on sequences of 50 IMU samples, which become 49
+# time-aligned feature rows once the trailing delta is removed.  We keep a
+# longer window in the buffer for robustness, but only the most recent
+# MODEL_SEQUENCE_LENGTH samples are fed to the model at every inference.
+MODEL_SEQUENCE_LENGTH = 49
 
 class IMUBuffer:
     """Buffer for storing IMU data and managing inference windows."""
-    def __init__(self, seqlen, overlap):
-        self.max_size = seqlen * 2
-        self.seqlen = seqlen
-        self.overlap = overlap
-        self.time_buf = np.zeros(self.max_size, dtype=np.float32)
-        self.acc_buf  = np.zeros((self.max_size, 3), dtype=np.float32)
-        self.gyro_buf = np.zeros((self.max_size, 3), dtype=np.float32)
-        self.buf_idx = 0
+
+    def __init__(self, window_size: int, step_size: int):
+        self.window_size = window_size
+        self.step_size = step_size
+        self.time_buf = deque()
+        self.acc_buf = deque()
+        self.gyro_buf = deque()
 
     def add(self, msg: Imu):
-        self.time_buf[self.buf_idx] = msg.header.stamp.to_sec()
-        self.acc_buf[self.buf_idx]  = [msg.linear_acceleration.x,
-                                       msg.linear_acceleration.y,
-                                       msg.linear_acceleration.z]
-        self.gyro_buf[self.buf_idx] = [msg.angular_velocity.x,
-                                       msg.angular_velocity.y,
-                                       msg.angular_velocity.z]
-        self.buf_idx += 1
+        self.time_buf.append(msg.header.stamp.to_sec())
+        self.acc_buf.append(
+            (
+                msg.linear_acceleration.x,
+                msg.linear_acceleration.y,
+                msg.linear_acceleration.z,
+            )
+        )
+        self.gyro_buf.append(
+            (
+                msg.angular_velocity.x,
+                msg.angular_velocity.y,
+                msg.angular_velocity.z,
+            )
+        )
 
-    def ready(self):
+    def ready(self) -> bool:
         """Check if enough samples are collected for inference."""
-        return self.buf_idx >= self.seqlen
+
+        return len(self.time_buf) >= self.window_size
 
     def get_window(self):
         """Get the current window of buffered IMU data."""
-        return (self.time_buf[:self.buf_idx],
-                self.acc_buf[:self.buf_idx],
-                self.gyro_buf[:self.buf_idx])
+
+        if not self.ready():
+            raise ValueError("Attempted to get window before buffer was full")
+
+        time = np.asarray(self.time_buf, dtype=np.float32)
+        acc = np.asarray(self.acc_buf, dtype=np.float32)
+        gyro = np.asarray(self.gyro_buf, dtype=np.float32)
+
+        # Only the most recent window_size samples are used for inference.
+        time = time[-self.window_size :]
+        acc = acc[-self.window_size :]
+        gyro = gyro[-self.window_size :]
+        return time, acc, gyro
 
     def slide_window(self):
-        """Keep only the last overlap samples after inference."""
-        # Keep last overlap samples
-        self.time_buf[:self.overlap] = self.time_buf[self.buf_idx - self.overlap : self.buf_idx]
-        self.acc_buf[:self.overlap]  = self.acc_buf[self.buf_idx - self.overlap : self.buf_idx]
-        self.gyro_buf[:self.overlap] = self.gyro_buf[self.buf_idx - self.overlap : self.buf_idx]
-        self.buf_idx = self.overlap
+        """Advance the window by the configured step size."""
+
+        remove_count = min(self.step_size, len(self.time_buf))
+        for _ in range(remove_count):
+            self.time_buf.popleft()
+            self.acc_buf.popleft()
+            self.gyro_buf.popleft()
 
 class CorrectedIMUPublisher:
     """Publishes corrected IMU messages to a ROS topic."""
@@ -84,11 +106,12 @@ class IMUInferenceNode:
         self.pkg_path = rp.get_path("imu_listener_pkg")
         self.onnx_path   = os.path.join(self.pkg_path, "models", "airimu_euroc.onnx")
         self.pickle_path = os.path.join(self.pkg_path, "results", "timeit_sim_new_net_output.pickle")
-        self.buffer = IMUBuffer(SEQLEN, OVERLAP)
+        self.buffer = IMUBuffer(WINDOW_SIZE, STEP_SIZE)
         self.results = []
         self.correction_counter = 0
         self.onnx_model = None
         self.corrected_imu_pub = CorrectedIMUPublisher("/corrected_imu")
+        self.model_sequence_length = MODEL_SEQUENCE_LENGTH
 
     def check_files(self):
         if not os.path.isfile(self.onnx_path):
@@ -106,7 +129,11 @@ class IMUInferenceNode:
             self.onnx_model = ort.InferenceSession(
                 self.onnx_path, sess_options=session_options, providers=["CPUExecutionProvider"]
             )
-            rospy.loginfo(f"[READY] Model loaded at ROS time: {rospy.Time.now().to_sec():.2f}")
+            self._configure_model_sequence_length()
+            rospy.loginfo(
+                f"[READY] Model loaded at ROS time: {rospy.Time.now().to_sec():.2f}; "
+                f"model sequence length: {self.model_sequence_length}"
+            )
         except Exception as e:
             rospy.logerr(f"Failed to load ONNX model: {e}")
             rospy.signal_shutdown("Fatal error: Model loading failed.")
@@ -120,20 +147,134 @@ class IMUInferenceNode:
         except Exception as e:
             rospy.logerr(f"Failed to save results: {e}")
 
+    def _configure_model_sequence_length(self):
+        """Use ONNX metadata to refine the expected sequence length."""
+
+        if self.onnx_model is None:
+            return
+
+        inferred_length = None
+
+        try:
+            for input_meta in self.onnx_model.get_inputs():
+                # Expecting tensors shaped as (batch, sequence, features)
+                if len(input_meta.shape) >= 3:
+                    seq_dim = input_meta.shape[1]
+                    if isinstance(seq_dim, int) and seq_dim > 0:
+                        inferred_length = seq_dim
+                        break
+
+            if inferred_length is not None:
+                # The network consumes fixed-length sequences; clamp the metadata to
+                # the available buffer so we never overrun the configured window.
+                inferred_length = int(inferred_length)
+                inferred_length = min(inferred_length, WINDOW_SIZE - 1)
+                if inferred_length <= 0:
+                    raise ValueError("Model sequence length inferred as non-positive")
+                self.model_sequence_length = inferred_length
+            else:
+                rospy.logwarn(
+                    "Unable to infer model sequence length from ONNX metadata; "
+                    f"using configured default of {self.model_sequence_length}."
+                )
+        except Exception as exc:
+            rospy.logwarn(
+                "Failed to determine model sequence length from ONNX metadata: %s. "
+                "Using default value %d.",
+                exc,
+                self.model_sequence_length,
+            )
+
+        # Ensure we always keep at least one sample for dt calculation.
+        if self.model_sequence_length >= WINDOW_SIZE:
+            rospy.logwarn(
+                "Model sequence length %d exceeds available window. Clamping to %d.",
+                self.model_sequence_length,
+                WINDOW_SIZE - 1,
+            )
+            self.model_sequence_length = WINDOW_SIZE - 1
+
     def run_inference(self):
         try:
             time, acc, gyro = self.buffer.get_window()
+
+            if time.shape[0] != self.buffer.window_size:
+                raise ValueError(
+                    f"Expected time buffer of length {self.buffer.window_size}, got {time.shape[0]}"
+                )
+
+            if acc.shape != gyro.shape:
+                raise ValueError(
+                    f"Acceleration shape {acc.shape} does not match gyro shape {gyro.shape}"
+                )
+
+            if acc.shape[0] != time.shape[0]:
+                raise ValueError(
+                    "Time and IMU data length mismatch: "
+                    f"{time.shape[0]} timestamps vs {acc.shape[0]} samples"
+                )
+
+            if acc.shape[1] != 3:
+                raise ValueError(f"Expected IMU vectors of length 3, got {acc.shape[1]}")
+
+            required_samples = self.model_sequence_length + 1
+            if time.shape[0] < required_samples:
+                raise ValueError(
+                    "Not enough samples for model inference: "
+                    f"have {time.shape[0]}, require {required_samples}"
+                )
+
+            if time.shape[0] > required_samples:
+                # Retain only the most recent samples needed by the model.
+                start = time.shape[0] - required_samples
+                time = time[start:]
+                acc = acc[start:]
+                gyro = gyro[start:]
+
             dt = np.diff(time)[..., None]
+            dt = dt.astype(np.float32, copy=False)
             acc = acc[:-1]
             gyro = gyro[:-1]
-            acc_b  = acc[None, ...]
-            gyro_b = gyro[None, ...]
+
+            acc_b = acc.astype(np.float32, copy=False)[None, ...]
+            gyro_b = gyro.astype(np.float32, copy=False)[None, ...]
+
+            if acc_b.shape[1] != self.model_sequence_length or gyro_b.shape[1] != self.model_sequence_length:
+                raise ValueError(
+                    "Prepared sequence length does not match model expectation: "
+                    f"acc {acc_b.shape[1]}, gyro {gyro_b.shape[1]}, expected {self.model_sequence_length}"
+                )
+
             corr_acc, corr_gyro = self.onnx_model.run(None, {"acc": acc_b, "gyro": gyro_b})
 
-            start = OVERLAP - 1
-            corrected_acc  = acc_b[:, start:, :]  + corr_acc
-            corrected_gyro = gyro_b[:, start:, :] + corr_gyro
-            dt_trim        = dt[start:, :]
+            if corr_acc.shape != corr_gyro.shape:
+                raise ValueError(
+                    f"Correction shapes do not match: acc {corr_acc.shape}, gyro {corr_gyro.shape}"
+                )
+
+            if corr_acc.ndim != 3:
+                raise ValueError(f"Expected 3D correction tensors, got {corr_acc.ndim} dimensions")
+
+            if corr_acc.shape[0] != acc_b.shape[0]:
+                raise ValueError(
+                    f"Batch dimension mismatch: input {acc_b.shape[0]} vs correction {corr_acc.shape[0]}"
+                )
+
+            if corr_acc.shape[2] != acc_b.shape[2]:
+                raise ValueError(
+                    f"Feature dimension mismatch: input {acc_b.shape[2]} vs correction {corr_acc.shape[2]}"
+                )
+
+            start_index = acc_b.shape[1] - corr_acc.shape[1]
+            if start_index < 0:
+                raise ValueError(
+                    f"Correction sequence longer than input sequence: "
+                    f"input length {acc_b.shape[1]}, correction length {corr_acc.shape[1]}"
+                )
+
+            corrected_acc = acc_b[:, start_index:, :] + corr_acc
+            corrected_gyro = gyro_b[:, start_index:, :] + corr_gyro
+            dt_trim = dt[start_index:, :]
 
             self.correction_counter += 1
             rospy.loginfo(f"[Correction #{self.correction_counter}]")
@@ -143,7 +284,7 @@ class IMUInferenceNode:
 
             # Publish the last corrected IMU message
             self.corrected_imu_pub.publish(
-               corrected_acc[0, -1], corrected_gyro[0, -1]
+                corrected_acc[0, -1], corrected_gyro[0, -1]
             )
 
             self.results.append({
