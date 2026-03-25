@@ -215,7 +215,7 @@ def traj_time_callback(msg):
         accel_list = []
 
         # side length 5m
-        num_passes = 2
+        num_passes = 5
         for _ in range(num_passes):
 
             # forward pass
@@ -493,7 +493,7 @@ def traj_time_callback(msg):
         # open the max down velocity limitation
         pub_max_down_vel_limit(MAX_DOWN_VEL_LIMIT)
     
-    elif TRAJ_NUM>8:
+    elif TRAJ_NUM>2:
         rospy.signal_shutdown("ALL trajectory done!, finish")
         
         

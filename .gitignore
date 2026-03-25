@@ -39,7 +39,9 @@ srv/_*.py
 *.pyc
 qtcreator-*
 *.user
-
+*.bag.active
+*.bag
+*.ulg
 /planning/cfg
 /planning/docs
 /planning/src
