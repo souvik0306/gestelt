@@ -118,8 +118,8 @@ class AIClientROS:
         ai_ms = (time.time() - t0) * 1000.0
         self.stats['total_ai_time_ms'] += ai_ms
 
-        ai_acc_noise  = np.asarray(acc_var_all[-1],  dtype=np.float64)
-        ai_gyro_noise = np.asarray(gyro_var_all[-1], dtype=np.float64)
+        ai_acc_noise  = np.asarray(acc_var_all[-1],  dtype=np.float64) #this is the last element of the returned list, which corresponds to the most recent prediction
+        ai_gyro_noise = np.asarray(gyro_var_all[-1], dtype=np.float64) #same for gyro
 
         if not (np.isfinite(ai_acc_noise).all() and np.isfinite(ai_gyro_noise).all()):
             rospy.logerr("[AI Client] NaN/Inf output, dropping")
