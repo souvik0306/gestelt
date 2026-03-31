@@ -16,10 +16,7 @@ catkin_package(
 
 catkin_install_python(PROGRAMS
   src/ai_imu_client.py
-  src/ai_imu_client_buffer.py
-  src/realtime_imu_inference.py
   src/realtime_imu_inference_buffer.py
-  src/test_inference_speed.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
