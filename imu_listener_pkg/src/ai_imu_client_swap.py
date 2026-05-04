@@ -115,9 +115,9 @@ class AIClientROS:
             rospy.logwarn("[AI Client] non-finite input, skipping")
             return None
 
-        # Remap MAVROS [x, y, z] -> model [z, y, x]
-        acc_model = acc[[2, 1, 0]]
-        gyro_model = gyro[[2, 1, 0]]
+        # Remap MAVROS [x, y, z] -> model [z, -y, x]
+        acc_model = acc[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
+        gyro_model = gyro[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
 
         t0 = time.time()
         _, _, acc_var_all, gyro_var_all = self.inference.inference_airimu(acc_model, gyro_model)
@@ -127,9 +127,9 @@ class AIClientROS:
         ai_acc_noise_model  = np.asarray(acc_var_all[-1],  dtype=np.float64) #this is the last element of the returned list, which corresponds to the most recent prediction
         ai_gyro_noise_model = np.asarray(gyro_var_all[-1], dtype=np.float64) #same for gyro
 
-        # Map model output [z, y, x] back to MAVROS [x, y, z]
-        ai_acc_noise = ai_acc_noise_model[[2, 1, 0]]
-        ai_gyro_noise = ai_gyro_noise_model[[2, 1, 0]]
+        # Map model output [z, -y, x] back to MAVROS [x, y, z]
+        ai_acc_noise = ai_acc_noise_model[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
+        ai_gyro_noise = ai_gyro_noise_model[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
 
         if not (np.isfinite(ai_acc_noise).all() and np.isfinite(ai_gyro_noise).all()):
             rospy.logerr("[AI Client] NaN/Inf output, dropping")
