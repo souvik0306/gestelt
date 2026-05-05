@@ -2,7 +2,7 @@
 
 SESSION="px4_sim"
 WS_DIR="$HOME/Ai_imu_ws_noise"
-AI_CLIENT_PATH="$HOME/Ai_imu_ws_noise/src/gestelt/imu_listener_pkg/src/ai_imu_client.py"
+AI_CLIENT_PATH="$HOME/Ai_imu_ws_noise/src/gestelt/imu_listener_pkg/src/ai_imu_client_swap.py"
 # AI_CLIENT_PATH="$HOME/Ai_imu_ws_noise/src/gestelt/imu_listener_pkg/src/loopback_imu_client.py"
 
 SCRIPT_DIR="$HOME/Ai_imu_ws_noise/src/gestelt/gestelt_bringup"
