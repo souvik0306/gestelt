@@ -1,10 +1,9 @@
 #!/bin/bash
 set -e
 
-SESSION="ai_imu_test"
+SESSION="gz_sim_single_uav"
 WS_DIR="$HOME/px4_sanity/gestelt_ws2"
 PX4_DIR="$HOME/Ai_imu_ws_noise/PX4-Autopilot"
-FCU_URL="udp://:14540@localhost:14580"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
@@ -24,7 +23,9 @@ source /opt/ros/noetic/setup.bash
 cd $WS_DIR
 source devel/setup.bash
 export PYTHONPATH=$WS_DIR/src/gestelt/imu_listener_pkg/src:\$PYTHONPATH
-roslaunch imu_listener_pkg ai_imu_inference.launch fcu_url:=$FCU_URL
+roslaunch imu_listener_pkg ai_imu_inference.launch
 " C-m
+# FCU URL is configured inside ai_imu_inference.launch 
+# [IMPORTANT: UPDATE THE LAUNCH FILE IF YOU WANT TO USE A DIFFERENT CONNECTION METHOD]
 
 tmux attach -t "$SESSION"
