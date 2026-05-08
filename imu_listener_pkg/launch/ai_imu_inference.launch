@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<launch>
+
+    <!-- <arg name="fcu_url" default="udp://:14540@127.0.0.1:14557"/> -->
+    <arg name="fcu_url" default="udp://:14540@localhost:14580"/>
+    
+    <include file="$(find mavros)/launch/px4.launch">
+        <arg name="fcu_url" value="$(arg fcu_url)"/>
+    </include>
+
+    <node pkg="imu_listener_pkg"
+          type="ai_imu_client_swap.py"
+          name="ai_imu_client"
+          output="screen"
+          required="true"/>
+
+</launch>

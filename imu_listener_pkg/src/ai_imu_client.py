@@ -15,6 +15,10 @@ import rospy
 from sensor_msgs.msg import Imu
 from ai_msgs.msg import ImuNoise
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
 from realtime_imu_inference_buffer import RealtimeIMUInference
 
 # ── Config ────────────────────────────────────
@@ -24,8 +28,7 @@ STATS_INTERVAL_S = 5.0
 
 # ── Helpers ───────────────────────────────────
 def _load_model(buffer_size: int) -> RealtimeIMUInference:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(os.path.dirname(script_dir),
+    model_path = os.path.join(os.path.dirname(SCRIPT_DIR),
                               "models", "airimu_cpu_fp32_cov_200.onnx")
     if not os.path.isfile(model_path):
         raise FileNotFoundError(f"ONNX model not found: {model_path}")
