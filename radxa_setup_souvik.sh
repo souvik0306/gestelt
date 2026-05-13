@@ -34,6 +34,9 @@ catkin build --workspace "$WS_DIR" ai_msgs mavros_msgs libmavconn mavros mavros_
 source "$WS_DIR/devel/setup.bash"
 export PYTHONPATH="$WS_DIR/src/gestelt/imu_listener_pkg/src:$PYTHONPATH"
 
+# For storing rosbag recordings
+mkdir -p "$WS_DIR/src/gestelt/imu_listener_pkg/data" 
+
 # Final verification checks
 echo "[CHECK] Verify workspace packages and generated MAVLink headers"
 rospack find mavros
