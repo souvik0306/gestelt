@@ -1,15 +1,15 @@
 #!/bin/bash
 set -e
 
-WS_DIR="$HOME/px4_sanity/gestelt_ws4"
+WS_DIR="$HOME/px4_sanity/gestelt_ws5"
 
 # Create workspace folder
 echo "[1/4] Create fresh workspace and clone repositories"
 rm -rf "$WS_DIR" && mkdir -p "$WS_DIR/src"
 
-git clone -b souvik_ai_uncertainty https://github.com/souvik0306/gestelt.git "$WS_DIR/src/gestelt"
+git clone -b souvik_radxa_v116 https://github.com/souvik0306/gestelt.git "$WS_DIR/src/gestelt"
 git clone -b master https://github.com/souvik0306/mavros.git "$WS_DIR/src/mavros"
-git clone -b px4_base https://github.com/souvik0306/mavlink.git "$WS_DIR/src/mavlink"
+git clone -b souvik_radxa_v1_16 https://github.com/souvik0306/mavlink.git "$WS_DIR/src/mavlink"
 
 # Install Python and MAVROS runtime dependencies
 echo "[2/4] Install dependencies and GeographicLib datasets"

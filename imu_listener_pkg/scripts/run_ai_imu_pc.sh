@@ -2,8 +2,8 @@
 set -e
 
 SESSION="gz_sim_single_uav"
-WS_DIR="$HOME/px4_sanity/gestelt_ws2"
-PX4_DIR="$HOME/Ai_imu_ws_noise/PX4-Autopilot"
+WS_DIR="$HOME/px4_sanity/gestelt_ws5"
+PX4_DIR="$HOME/Ai_imu_radxa_ws/PX4-Autopilot"
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
