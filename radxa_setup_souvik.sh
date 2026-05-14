@@ -43,6 +43,15 @@ rospack find mavros
 rospack find ai_msgs
 rospack find imu_listener_pkg
 
-find "$WS_DIR/build" "$WS_DIR/devel" -name "mavlink_msg_ai_imu_noise.h"
-grep -R "AI_IMU_NOISE" "$WS_DIR/build" "$WS_DIR/devel" 2>/dev/null | head
+echo "[CHECK] Verify custom MAVLink XML"
+grep -R "AI_IMU_NOISE" "$WS_DIR/src/mavlink/message_definitions/v1.0/common.xml" || {
+    echo "ERROR: AI_IMU_NOISE missing from custom common.xml"
+    exit 1
+}
+
+echo "[CHECK] Verify MAVROS source plugin uses custom message"
+grep -R --exclude-dir=.git "ai_imu_noise\|AI_IMU_NOISE" "$WS_DIR/src/mavros" -n | head || {
+    echo "ERROR: AI IMU noise code not found in source MAVROS"
+    exit 1
+}
 echo "[DONE] Workspace setup completed successfully"
