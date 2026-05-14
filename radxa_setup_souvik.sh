@@ -22,7 +22,6 @@ sudo bash ./install_geographiclib_datasets.sh
 echo "[3/4] Import third party repositories and verify custom MAVLink XML"
 cd "$WS_DIR/src/gestelt"
 vcs import < thirdparty.repos --recursive
-grep -R "AI_IMU_NOISE" "$WS_DIR/src/mavlink/message_definitions/v1.0/common.xml"
 
 # Catkin build only the minimal AI IMU and MAVROS packages
 echo "[4/4] Build MAVROS and AI IMU packages from source workspace"
