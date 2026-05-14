@@ -19,7 +19,7 @@ wget -O install_geographiclib_datasets.sh https://raw.githubusercontent.com/mavl
 sudo bash ./install_geographiclib_datasets.sh
 
 # Import third party repositories required by gestelt
-echo "[3/4] Import third party repositories and verify custom MAVLink XML"
+echo "[3/4] Import third party repositories"
 cd "$WS_DIR/src/gestelt"
 vcs import < thirdparty.repos --recursive
 
