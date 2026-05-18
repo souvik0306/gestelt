@@ -19,7 +19,6 @@
 #include <std_msgs/Empty.h>
 #include <std_msgs/Int8.h>
 #include <std_msgs/String.h>
-#include <std_msgs/Bool.h>
 #include <trajectory_msgs/MultiDOFJointTrajectory.h>
 
 #include <gestelt_msgs/CommanderCommand.h>
@@ -27,10 +26,6 @@
 
 #include <visualization_msgs/Marker.h>
 
-
-#include "controller_msgs/FlatTarget.h"
-#include <geometry_msgs/TwistStamped.h>
-#include <std_srvs/SetBool.h> // for service client
 using namespace Eigen;
 
 /* State machine  */
@@ -92,25 +87,7 @@ private: // Class Methods
   * @brief Callback for heartbeat from Planner
   */
   void plannerHeartbeatCb(std_msgs::EmptyPtr msg);
-  
-  /**
-   * @brief hover position callback, for desired hover position
-   * 
-   * @param msg 
-   */
-  void hoverPositionCb(const geometry_msgs::Pose::ConstPtr &msg);
 
-  /*
-  * @brief Callback for circular trajectory
-  */
-  void circularTrajCb(const controller_msgs::FlatTarget::ConstPtr &msg);
-
-  /**
-   * @brief Request for circular trajectory
-   * 
-   * 
-   */
-  void requestCircularMission();
   /**
    * @brief Callback for trajectory points from mav_trajectory_generation  
    */
@@ -125,7 +102,7 @@ private: // Class Methods
    * @brief Callback for Mavros state 
    */
   void UAVStateCb(const mavros_msgs::State::ConstPtr &msg);
-  void downVelLimitCB(const std_msgs::Bool::ConstPtr &msg);
+
   /**
    * @brief Callback for UAV Pose
    */
@@ -214,7 +191,6 @@ private: // Class Methods
   {
     // Check that difference between desired taking off height and current UAV position
     // is within tolerance 
-    // return abs(uav_pose_.pose.position.z - takeoff_height_) < take_off_landing_tol_  && abs(uav_pose_.pose.position.x - hover_pos_(0)) < take_off_landing_tol_ && abs(uav_pose_.pose.position.y - hover_pos_(1)) < take_off_landing_tol_;
     return abs(uav_pose_.pose.position.z - takeoff_height_) < take_off_landing_tol_;
   }
 
@@ -242,15 +218,6 @@ private: // Class Methods
     Vector3d p, Vector3d v, Vector3d a, 
     Vector3d j, double yaw, double yaw_rate, 
     uint16_t type_mask = 0);
-
-  void pubflatrefState(
-    Vector3d p, Vector3d v, Vector3d a, 
-    Vector3d j, double yaw, double yaw_rate, 
-    uint16_t type_mask = 0);
-
-  void pubrefState(
-    Vector3d p, Vector3d v);
-
 
   /* Helper methods */
 
@@ -383,32 +350,24 @@ private: // Member variables
   ros::Publisher pos_cmd_raw_pub_; // Publisher of commands for PX4 
   ros::Publisher uav_path_pub_; // Publisher of UAV pose history
   ros::Publisher server_state_pub_; // Publisher of current uav and server state
-  ros::Publisher flat_reference_pub_; // Publisher of flat reference for controller
-  ros::Publisher reference_pub_; // Publisher of reference velocity for controller
   
   /* Subscriber */
   ros::Subscriber plan_traj_sub_; // Subscriber for planner trajectory
 
   ros::Subscriber planner_hb_sub_; // Subscriber to planner heartbeat
-  ros::Subscriber hover_pos_sub_; // Subscriber to hover position
-  ros::Subscriber circular_traj_sub_; // Subscriber to circular trajectory
-
   ros::Subscriber uav_state_sub_; // Subscriber to UAV State (MavROS)
   ros::Subscriber pose_sub_; // Subscriber to UAV State (MavROS)
   ros::Subscriber odom_sub_; // Subscriber to UAV State (MavROS)
   // TODO: make this a service server
   ros::Subscriber command_server_sub_; // Subscriber to trajectory server commands
-  ros::Subscriber down_vel_limit_sub_; // Subscriber to down velocity limit
+
   /* Timer */
   ros::Timer exec_traj_timer_; // Timer to generate PVA commands for trajectory execution
   ros::Timer tick_state_timer_; // Timer to tick the state machine 
   ros::Timer debug_timer_; // Timer to publish debug data
 
-  /* Service server */
   /** @brief Service clients **/
   ros::ServiceClient arming_client, set_mode_client; 
-  ros::ServiceClient circular_client_; // Service client for circular trajectory
-  std_srvs::SetBool start_circular_srv_; // Service signal for circular trajectory
 
   /* Stored data*/
   ServerEvent server_event_{ServerEvent::EMPTY_E};
@@ -436,7 +395,6 @@ private: // Member variables
 
   ros::Time last_traj_msg_time_{0}; // Time of last trajectory message
 
-  bool mission_has_entered_{false}; // Flag to indicate that mission has entered state
   bool first_pose_{true};
   bool mission_completed_{true};
 
@@ -447,17 +405,9 @@ private: // Member variables
   uint16_t USE_FORCE; // Use force in typemask
   uint16_t IGNORE_YAW; // Ignore yaw in typemask
   uint16_t IGNORE_YAW_RATE; // Ignore yaw rate in typemask
-  uint16_t IGNORE_VZ;    //Ignore velocity z direction in typemask        //new
-  uint16_t IGNORE_AFZ;    //Ignore acceleration/force in z in typemask      //new
+
   uint16_t mission_type_mask_{0}; // Current type mask
 
-
-  //yaw control
-  bool YAW_FOLLOW_=false;   //follow the yaw of the mission
-
-  // MAX down velocity limits
-  bool MAX_DOWN_VEL_LIMIT_=true; //limit the down velocity to a certain value
-  
   std::mutex cmd_mutex_; // mutex for PVA Commands
 
   /* Params */ 
@@ -471,10 +421,8 @@ private: // Member variables
   double takeoff_height_{0.0}; // Default height to take off to 
   double landed_height_{0.1}; // We assume that the ground is even (z = 0)
   double take_off_landing_tol_{0.1}; // tolerance within desired take off or landing 
-  int uav_pose_history_size_; // Maximum UAV pose history size
 
-  Eigen::Vector3d takeoff_ramp_{0.0, 0.0, 0.0}; //takeoff ramp value
-  Eigen::Vector3d hover_pos_{0.0, 0.0, 0.0}; // Desired hover position
+  int uav_pose_history_size_; // Maximum UAV pose history size
 
   double traj_msg_timeout_{0.2}; 
 

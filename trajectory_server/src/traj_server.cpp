@@ -14,8 +14,6 @@ void TrajServer::init(ros::NodeHandle& nh)
 
   // Operational params
   nh.param("traj_server/takeoff_height", takeoff_height_, 1.0);
-  nh.param("traj_server/drone_fix_yaw", last_mission_yaw_, -M_PI/2);
-  nh.param("traj_server/yaw_follow", YAW_FOLLOW_, false);
   nh.param("traj_server/planner_heartbeat_timeout", planner_heartbeat_timeout_, 0.5);
   nh.param("traj_server/ignore_planner_heartbeat", ignore_heartbeat_, false);
 
@@ -29,7 +27,7 @@ void TrajServer::init(ros::NodeHandle& nh)
   nh.param("traj_server/safety_box/min_z", safety_box_.min_z, -1.0);
 
   // Frequency params
-  nh.param("traj_server/pub_cmd_freq", pub_cmd_freq_, 50.0); // frequency to publish commands
+  nh.param("traj_server/pub_cmd_freq", pub_cmd_freq_, 25.0); // frequency to publish commands
   double state_machine_tick_freq; // Frequency to tick the state machine transitions
   nh.param("traj_server/state_machine_tick_freq", state_machine_tick_freq, 50.0);
   double debug_freq; // Frequency to publish debug information
@@ -47,25 +45,19 @@ void TrajServer::init(ros::NodeHandle& nh)
   // Subscription to planner
   plan_traj_sub_ = nh.subscribe("/planner/trajectory", 10, &TrajServer::multiDOFJointTrajectoryCb, this);
   planner_hb_sub_ = nh.subscribe("/planner/heartbeat", 10, &TrajServer::plannerHeartbeatCb, this);
-  hover_pos_sub_ = nh.subscribe("/planner/hover_position", 10, &TrajServer::hoverPositionCb, this);
-  circular_traj_sub_ = nh.subscribe("/reference/flatsetpoint", 10, &TrajServer::circularTrajCb, this);
-  start_circular_srv_.request.data = false;
-  // circular traj client
-  circular_client_ = nh.serviceClient<std_srvs::SetBool>("start");
 
   // Subscription to UAV (via MavROS)
   uav_state_sub_ = nh.subscribe<mavros_msgs::State>("/mavros/state", 10, &TrajServer::UAVStateCb, this);
   pose_sub_ = nh.subscribe<geometry_msgs::PoseStamped>("/mavros/local_position/pose", 1, &TrajServer::UAVPoseCB, this);
   odom_sub_ = nh.subscribe<nav_msgs::Odometry>("/mavros/local_position/odom", 1, &TrajServer::UAVOdomCB, this);
-  down_vel_limit_sub_=nh.subscribe<std_msgs::Bool>("/planner/max_down_vel_limit", 1, &TrajServer::downVelLimitCB, this);
+
   /////////////////
   /* Publishers */
   /////////////////
   pos_cmd_raw_pub_ = nh.advertise<mavros_msgs::PositionTarget>("/mavros/setpoint_raw/local", 50);
   uav_path_pub_ = nh.advertise<nav_msgs::Path>("/uav_path_trajectory", 50);
   server_state_pub_ = nh.advertise<gestelt_msgs::CommanderState>("/traj_server/state", 50);
-  // reference_pub_ = nh.advertise<geometry_msgs::TwistStamped>("/reference/setpoint_test", 50);
-  flat_reference_pub_ = nh.advertise<controller_msgs::FlatTarget>("/reference/flatsetpoint", 50);
+
   /////////////////
   /* Service clients */
   /////////////////
@@ -97,11 +89,6 @@ void TrajServer::plannerHeartbeatCb(std_msgs::EmptyPtr msg)
   heartbeat_time_ = ros::Time::now();
 }
 
-void TrajServer::hoverPositionCb(const geometry_msgs::Pose::ConstPtr &msg)
-{
-  hover_pos_(0) = msg->position.x;
-  hover_pos_(1) = msg->position.y;
-}
 void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointTrajectory::ConstPtr &msg)
 {
   if (getServerState() != ServerState::MISSION){ 
@@ -112,7 +99,25 @@ void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointT
   last_traj_msg_time_ = ros::Time::now();
 
   std::lock_guard<std::mutex> cmd_guard(cmd_mutex_);
-  
+
+  // Create rotation frame from NED To ROS
+  double roll_deg = 0; // roll (x) (Degrees)180
+  double pitch_deg = 0;   // pitch (y)0
+  double yaw_deg =  0;   // yaw (z)90
+
+  // euler in radians
+  double roll = (M_PI/180.0) * roll_deg; 
+  double pitch = (M_PI/180.0) * pitch_deg;  
+  double yaw = (M_PI/180.0) * yaw_deg; 
+
+  Eigen::Matrix3d rot_mat;
+
+  // Anti-Clockwise rotation is positive
+  rot_mat << cos(yaw) * cos(pitch),    -sin(yaw) * cos(roll) + cos(yaw) * sin(pitch) * sin(roll),    sin(yaw) * sin(roll) + cos(yaw) * sin(pitch) * cos(roll), 
+             sin(yaw) * cos(pitch),     cos(yaw) * cos(roll) + sin(yaw) * sin(pitch) * sin(roll),    -cos(yaw) * sin(roll) + sin(yaw) * sin(pitch) * cos(roll),
+             -sin(pitch),                  cos(pitch) * sin(roll),                                            cos(pitch) * cos(yaw);
+
+
   // We only take the first point of the trajectory
   // Message breakdown:
   // msg.joint_names: contain "base_link"
@@ -129,8 +134,8 @@ void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointT
   }
   else {
     geomMsgsVector3ToEigenVector3(msg->points[0].transforms[0].translation, last_mission_pos_);
-    // last_mission_yaw_ = quaternionToRPY(msg->points[0].transforms[0].rotation)(2);
-   
+    last_mission_yaw_ = quaternionToRPY(msg->points[0].transforms[0].rotation)(2);
+
     // last_mission_pos_ = rot_mat * last_mission_pos_;
   }
 
@@ -140,9 +145,7 @@ void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointT
   }
   else {
     geomMsgsVector3ToEigenVector3(msg->points[0].velocities[0].linear, last_mission_vel_);
-    mission_type_mask_ |= IGNORE_YAW_RATE;
-    // last_mission_yaw_dot_ = msg->points[0].velocities[0].angular.z; //yaw rate
-    // ROS_INFO("received velocity: %f, %f, %f", last_mission_vel_(0), last_mission_vel_(1), last_mission_vel_(2));
+    last_mission_yaw_dot_ = msg->points[0].velocities[0].angular.z; //yaw rate
   }
 
   // Check if acceleration exists, else ignore
@@ -151,27 +154,13 @@ void TrajServer::multiDOFJointTrajectoryCb(const trajectory_msgs::MultiDOFJointT
   }
   else {
     geomMsgsVector3ToEigenVector3(msg->points[0].accelerations[0].linear, last_mission_acc_);
-    // ROS_INFO("received acceleration: %f, %f, %f", last_mission_acc_(0), last_mission_acc_(1), last_mission_acc_(2));
   }
-  // ROS_INFO("mission_type_mask_: %d", mission_type_mask_);
-
-  //calculate the yaw angle as the tangent of the position
-  if (YAW_FOLLOW_){
-    last_mission_yaw_ = atan2(last_mission_vel_(1), last_mission_vel_(0));
-    last_mission_yaw_dot_ = atan2(last_mission_acc_(1), last_mission_acc_(0));
-  }
-
 }
 
 void TrajServer::UAVStateCb(const mavros_msgs::State::ConstPtr &msg)
 {
   // logInfoThrottled(string_format("State: Mode[%s], Connected[%d], Armed[%d]", msg->mode.c_str(), msg->connected, msg->armed), 1.0);
   uav_current_state_ = *msg;
-}
-
-void TrajServer::downVelLimitCB(const std_msgs::Bool::ConstPtr &msg)
-{
-  MAX_DOWN_VEL_LIMIT_ = msg->data;
 }
 
 void TrajServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
@@ -182,7 +171,7 @@ void TrajServer::UAVPoseCB(const geometry_msgs::PoseStamped::ConstPtr &msg)
     num_pose_msgs_++;
     if (num_pose_msgs_ > 100){
       first_pose_ = false;
-      // ROS_INFO("Taking off pose locked to (%f, %f)", last_mission_pos_(0), last_mission_pos_(1));
+      ROS_INFO("Taking off pose locked to (%f, %f)", last_mission_pos_(0), last_mission_pos_(1));
     }
   }
 
@@ -213,14 +202,7 @@ void TrajServer::serverCommandCb(const gestelt_msgs::CommanderCommand::ConstPtr 
 
 void TrajServer::execTrajTimerCb(const ros::TimerEvent &e)
 {
-  // has received vel value
-  // ROS_INFO("execTrajTimerCb received velocity: %f, %f, %f", last_mission_vel_(0), last_mission_vel_(1), last_mission_vel_(2));
-  // last_mission_yaw_ = -M_PI/2; defined as a parameter
-  
-  // ROS_INFO("last_mission_yaw: %f", last_mission_yaw_);
-  
   switch (getServerState()){
-    
     case ServerState::INIT:
       // Do nothing, drone is not initialized
       break;
@@ -238,34 +220,20 @@ void TrajServer::execTrajTimerCb(const ros::TimerEvent &e)
       break;
     
     case ServerState::HOVER:
-
-      // if the circular mission is requested, when back to hover,
-      // shutdown the circular_traj_sub_ and hover at current position
-      if (mission_has_entered_==true){
-      circular_traj_sub_.shutdown();
-      }
-
       execHover();
       break;
     
     case ServerState::MISSION:
       if (!isExecutingMission()){
-        // logInfoThrottled("Waiting for mission", 5.0);
+        logInfoThrottled("Waiting for mission", 5.0);
         execHover();
-
-        //-----only for circular mission-----//
-        // mission_has_entered_=true;
-        // execMission();
       }
       else {
-        // ROS_INFO("ServerState received velocity: %f, %f, %f", last_mission_vel_(0), last_mission_vel_(1), last_mission_vel_(2));
-
         if (!ignore_heartbeat_ && isPlannerHeartbeatTimeout()){
           logErrorThrottled("[traj_server] Lost heartbeat from the planner.", 1.0);
-          ROS_INFO("in lost heartbeat"); 
           execHover();
         }
-        // ROS_INFO("final ServerState::MISSION,mission_vel: %f, %f, %f", last_mission_vel_(0), last_mission_vel_(1), last_mission_vel_(2));
+
         execMission();
       }
       break;
@@ -276,29 +244,7 @@ void TrajServer::execTrajTimerCb(const ros::TimerEvent &e)
       break;
   }
 }
-/* request for circular mission*/
-void TrajServer::requestCircularMission()
-{   
-  ros::service::waitForService("start");
-  std_srvs::SetBool srv;
-  srv.request.data = true;
-  start_circular_srv_ = srv;
-  try {
-      // call the service
-      if (circular_client_.call(srv)) {
-          if (srv.response.success) {
-              ROS_INFO("Service call succeeded with message: %s", start_circular_srv_.response.message.c_str());
-          } else {
-              ROS_WARN("Service call failed with message: %s", start_circular_srv_.response.message.c_str());
-          }
-      } else {
-          ROS_ERROR("Failed to call service");
-      }
-  } catch (const std::exception& e) {
-      ROS_ERROR("Service call failed: %s", e.what());        
-  }
 
-}
 void TrajServer::tickServerStateTimerCb(const ros::TimerEvent &e)
 {
   // logInfoThrottled(string_format("Current Server State: [%s]", StateToString(getServerState()).c_str()), 1.0);
@@ -509,23 +455,6 @@ void TrajServer::debugTimerCb(const ros::TimerEvent &e){
   uav_path_pub_.publish(uav_path);
 }
 
-/*circular traj callback*/
-void TrajServer::circularTrajCb(const controller_msgs::FlatTarget::ConstPtr &msg)
-{
-  int type_mask = IGNORE_YAW | IGNORE_YAW_RATE ;
- 
-  last_mission_pos_(0) = msg->position.x;
-  last_mission_pos_(1) = msg->position.y;
-  last_mission_pos_(2) = msg->position.z;
-  last_mission_vel_(0) = msg->velocity.x;
-  last_mission_vel_(1) = msg->velocity.y;
-  last_mission_vel_(2) = msg->velocity.z;
-  last_mission_acc_(0) = msg->acceleration.x;
-  last_mission_acc_(1) = msg->acceleration.y;
-  last_mission_acc_(2) = msg->acceleration.z;
-
-
-}
 /* Trajectory execution methods */
 
 void TrajServer::execLand()
@@ -546,40 +475,8 @@ void TrajServer::execTakeOff()
   int type_mask = IGNORE_VEL | IGNORE_ACC | IGNORE_YAW_RATE ; // Ignore Velocity, Acceleration and yaw rate
   
   Eigen::Vector3d pos = last_mission_pos_;
-  
-  if(isUAVReady()){
-    // x direction takeoff ramp
-    // if (abs(takeoff_ramp_(0)) < abs(hover_pos_(0))){
-    //   takeoff_ramp_(0) += (hover_pos_(0)*pub_cmd_freq_)/(pub_cmd_freq_*400)*hover_pos_.array().sign()(0); // 25Hz, then the addition is 0.01m, for 0.04s
-    // }
-    // else {
-    //   takeoff_ramp_(0) = hover_pos_(0);
-    // }
+  pos(2) = takeoff_height_;
 
-    // // y direction takeoff ramp
-    // if (abs(takeoff_ramp_(1)) < abs(hover_pos_(1))){
-    //   takeoff_ramp_(1) += (hover_pos_(1)*pub_cmd_freq_)/(pub_cmd_freq_*400)*hover_pos_.array().sign()(1); // 25Hz, then the addition is 0.01m, for 0.04s
-    // }
-    // else {
-    //   takeoff_ramp_(1) = hover_pos_(1);
-    // }
- 
-    // z axis takeoff ramp
-    if (takeoff_ramp_(2) < takeoff_height_){
-      takeoff_ramp_(2) += pub_cmd_freq_/(pub_cmd_freq_*200); // 25Hz, then the addition is 0.01m, for 0.04s
-    }
-    else {
-      takeoff_ramp_(2) = last_mission_pos_(2);
-    }
-
-  }
-  else // if the drone is not ready, then the takeoff ramp is 0
-  {
-    takeoff_ramp_(2) = 0.0;
-  }
-
-  pos(2) = takeoff_ramp_(2);
-  last_mission_pos_ = pos;
   publishCmd( pos, Vector3d::Zero(), 
               Vector3d::Zero(), Vector3d::Zero(), 
               last_mission_yaw_, 0, 
@@ -590,11 +487,11 @@ void TrajServer::execHover()
 {
   int type_mask = IGNORE_VEL | IGNORE_ACC | IGNORE_YAW_RATE ; // Ignore Velocity, Acceleration and yaw rate
   Eigen::Vector3d pos = last_mission_pos_;
-  
+
   if (pos(2) < 0.1){
     pos(2) = takeoff_height_;
   }
-  last_mission_pos_ = pos;
+
   publishCmd( pos, Vector3d::Zero(), 
               Vector3d::Zero(), Vector3d::Zero(), 
               last_mission_yaw_, 0, 
@@ -604,27 +501,11 @@ void TrajServer::execHover()
 void TrajServer::execMission()
 {
   std::lock_guard<std::mutex> cmd_guard(cmd_mutex_);
-  if (!YAW_FOLLOW_){
-  mission_type_mask_ = IGNORE_YAW_RATE; // Ignore yaw rate 
-  }
-  if (MAX_DOWN_VEL_LIMIT_ && last_mission_vel_(2) < 0){
-    last_mission_vel_(2) = std::max(last_mission_vel_(2), -1.0);
-  }
 
-  // ROS_INFO("execMission() mission_vel: %f, %f, %f", last_mission_vel_(0), last_mission_vel_(1), last_mission_vel_(2));
   publishCmd( last_mission_pos_, last_mission_vel_, 
               last_mission_acc_, last_mission_jerk_, 
               last_mission_yaw_, last_mission_yaw_dot_, 
               mission_type_mask_);
-  
-  pubflatrefState( last_mission_pos_, last_mission_vel_, 
-              last_mission_acc_, last_mission_jerk_, 
-              last_mission_yaw_, last_mission_yaw_dot_, 
-              mission_type_mask_);
-
-  // pubrefState( last_mission_pos_, last_mission_vel_);
-
-
 }
 
 /* Publisher methods */
@@ -657,44 +538,9 @@ void TrajServer::publishCmd(
   pos_cmd.acceleration_or_force.z = a(2);
   pos_cmd.yaw = yaw;
   pos_cmd.yaw_rate = yaw_rate;
-  // ROS_INFO("Position for final command: %f, %f, %f", p(0), p(1), p(2));
-  // ROS_INFO("Velocity for final command: %f, %f, %f", v(0), v(1), v(2));
-  // ROS_INFO("Acceleration for final command: %f, %f, %f", a(0), a(1), a(2));
   pos_cmd_raw_pub_.publish(pos_cmd);
 }
-void TrajServer::pubflatrefState( Vector3d p, Vector3d v, Vector3d a, Vector3d j, double yaw, double yaw_rate, uint16_t type_mask)
-{
-  controller_msgs::FlatTarget msg;
 
-  msg.header.stamp = ros::Time::now();
-  msg.header.frame_id = origin_frame_;
-  msg.type_mask = 2;  //PVA
-  msg.position.x = p.x();
-  msg.position.y = p.y();
-  msg.position.z = p.z();
-  msg.velocity.x = v.x();
-  msg.velocity.y = v.y();
-  msg.velocity.z = v.z();
-  msg.acceleration.x = a.x();
-  msg.acceleration.y = a.y();
-  msg.acceleration.z = a.z();
-  flat_reference_pub_.publish(msg);
-}
-
-
-// void TrajServer::pubrefState(Vector3d p, Vector3d v) {
-//   geometry_msgs::TwistStamped msg;
-
-//   msg.header.stamp = ros::Time::now();
-//   msg.header.frame_id = origin_frame_;
-//   msg.twist.angular.x = p(0);
-//   msg.twist.angular.y = p(1);
-//   msg.twist.angular.z = p(2);
-//   msg.twist.linear.x = v(0);
-//   msg.twist.linear.y = v(1);
-//   msg.twist.linear.z = v(2);
-//   reference_pub_.publish(msg);
-// }
 /* Helper methods */
 
 bool TrajServer::toggleOffboardMode(bool toggle)
@@ -816,3 +662,4 @@ Eigen::Vector3d TrajServer::quaternionToRPY(const geometry_msgs::Quaternion& qua
 
   return euler;
 }
+

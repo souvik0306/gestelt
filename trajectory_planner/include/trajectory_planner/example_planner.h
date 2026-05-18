@@ -14,7 +14,7 @@
 #include <mav_trajectory_generation_ros/ros_conversions.h>
 
 #include <gestelt_msgs/Goals.h>
-#include <std_msgs/Float32.h>
+
 class ExamplePlanner {
  public:
   ExamplePlanner(ros::NodeHandle& nh);
@@ -23,15 +23,12 @@ class ExamplePlanner {
 
   void waypointsCB(const gestelt_msgs::GoalsPtr &msg);
 
-  void timeFactorCB(const std_msgs::Float32::ConstPtr &msg);     
-
   void setMaxSpeed(double max_v);
+
   // Plans a trajectory to take off from the current position and
   // fly to the given altitude (while maintaining x,y, and yaw).
   bool planTrajectory(const std::vector<Eigen::Vector3d>& wp_pos,
-                      const std::vector<Eigen::Vector3d>& wp_vel,
                       const std::vector<Eigen::Vector3d>& wp_acc,
-                      const gestelt_msgs::GoalsPtr &msg,
                       mav_trajectory_generation::Trajectory* trajectory);
                       
 
@@ -46,19 +43,16 @@ class ExamplePlanner {
                       const Eigen::VectorXd& start_pos,
                       const Eigen::VectorXd& start_vel,
                       double v_max, double a_max,
-                      mav_trajectory_generation::Trajectory* trajectory);               
+                      mav_trajectory_generation::Trajectory* trajectory);
+                      
   bool publishTrajectory(const mav_trajectory_generation::Trajectory& trajectory);
 
  private:
   ros::Publisher pub_markers_;
   ros::Publisher pub_trajectory_;
-  ros::Publisher pub_traj_total_time_;
-
-  
   ros::Subscriber sub_odom_;
   ros::Subscriber goal_waypoints_sub_;
-  ros::Subscriber time_factor_sub_;
-
+  
   ros::NodeHandle& nh_;
   Eigen::Affine3d current_pose_;
   Eigen::Vector3d current_velocity_;
@@ -67,12 +61,8 @@ class ExamplePlanner {
   double max_a_; // m/s^2
   double max_ang_v_;
   double max_ang_a_;
-  double max_j_;
-  double segment_time_factor_;
-  double segment_time_factor_terminal_;
 
   std::vector<Eigen::Vector3d> goal_waypoints_;
-  std::vector<Eigen::Vector3d> goal_waypoints_vel_;
   std::vector<Eigen::Vector3d> goal_waypoints_acc_;
   std::string trajectory_frame_id_; //frame id of planned trajectory
 };

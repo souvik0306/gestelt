@@ -39,9 +39,7 @@ srv/_*.py
 *.pyc
 qtcreator-*
 *.user
-*.bag.active
-*.bag
-*.ulg
+
 /planning/cfg
 /planning/docs
 /planning/src
@@ -53,8 +51,3 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
-*.npy
-*.pth
-gestelt_bringup/src/Learning_Agile/*
-*.bag
-*.history

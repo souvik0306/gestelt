@@ -3,7 +3,7 @@
 <launch>
   <!-- initial position -->
   <arg name="init_x" default="0.0"/>
-  <arg name="init_y" default="1.8"/>
+  <arg name="init_y" default="0.0"/>
   <!-- world_filename_rel is defined relative to gestelt_bringup/simulations/worlds -->
   <arg name="world_filename_rel" default="empty.world" />
   <!-- world_filename_abs is absolute filepath -->
@@ -23,7 +23,7 @@
 
   <!-- Spawn drone in gazebo with mavros plugin -->
   <include file="$(find gestelt_bringup)/launch/sitl/include/px4_sitl.xml">
-    <arg name="vehicle" default="gazebo-classic_iris"/>
+    <arg name="vehicle" default="iris"/>
     <arg name="model"   default="raynor"/>
     <arg name="init_x"  value="$(arg init_x)"/>
     <arg name="init_y"  value="$(arg init_y)"/>
@@ -31,10 +31,9 @@
   </include>
 
   <!-- Add static transform from world to map -->
-  <!-- map frame only used in the simulation-->
   <node pkg="tf" type="static_transform_publisher" 
     name="world_to_map_tf" 
-    args="-$(arg init_x) -$(arg init_y) 0 0 0 0 1 world map 100">
+    args="0 0 0 0 0 0 1 world map 100">
   </node>
 
   <!-- RVIZ -->

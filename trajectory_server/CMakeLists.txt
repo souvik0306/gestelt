@@ -11,7 +11,6 @@ set(ROS_LIBRARIES
   geometry_msgs
   mavros_msgs
   gestelt_msgs
-  controller_msgs
 )
 
 # set(ROS_DEPENDS

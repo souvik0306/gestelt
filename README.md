@@ -15,15 +15,13 @@ sudo apt install ros-noetic-desktop-full
 # Install other dependencies
 sudo apt install git build-essential tmux python3-catkin-tools python3-vcstool xmlstarlet -y
 sudo apt install ros-${ROS_DISTRO}-mavlink ros-${ROS_DISTRO}-mavros ros-${ROS_DISTRO}-mavros-msgs ros-${ROS_DISTRO}-mavros-extras -y
-wget https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
-sudo bash ./install_geographiclib_datasets.sh
 ```
 
 2. Clone repositories
 ```bash
 mkdir -p ~/gestelt_ws/src/
 cd ~/gestelt_ws/src
-git clone https://github.com/JohnTGZ/gestelt.git -b min_snap_tianchensun
+git clone https://github.com/JohnTGZ/gestelt.git -b min_snap
 cd gestelt
 vcs import < simulators.repos --recursive
 vcs import < thirdparty.repos --recursive
@@ -33,23 +31,12 @@ vcs import < thirdparty.repos --recursive
 ```bash
 # cd to PX4-Autopilot repo
 cd ~/gestelt_ws/PX4-Autopilot
-
-
-# Copy the custom controller over
-cp -r ~/gestelt_ws/src/gestelt/gestelt_bringup/customized_controller/mc_pos_control ~/gestelt_ws/PX4-Autopilot/src/modules/
-
 bash ./Tools/setup/ubuntu.sh 
 # Make SITL target for Gazebo simulation
 DONT_RUN=1 make px4_sitl gazebo-classic
-# for PX4 V1.13.0
-DONT_RUN=1 make px4_sitl gazebo
-
 
 # Copy the custom drone model over
 cp -r ~/gestelt_ws/src/gestelt/gestelt_bringup/simulation/models/raynor ~/gestelt_ws/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/
-# for PX4 V1.13.0
-cp -r ~/gestelt_ws/src/gestelt/gestelt_bringup/simulation/models/raynor ~/gestelt_ws/PX4-Autopilot/Tools/sitl_gazebo/models/
-
 
 # [EMERGENCY USE] IF you screw up the PX4 Autopilot build at any point, clean up the build files via the following command:
 make distclean
@@ -61,8 +48,6 @@ make distclean
 cd ~/gestelt_ws/
 
 # Building for debugging/development
-catkin config --merge-devel
-catkin clean
 catkin build
 # Building for release mode (For use on Radxa)
 catkin build -DCMAKE_BUILD_TYPE=Release
