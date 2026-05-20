@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WS_DIR="$HOME/px4_sanity/gestelt_ws2"
+WS_DIR="$HOME/px4_sanity/gestelt_ws"
 
 source /opt/ros/noetic/setup.bash
 
@@ -17,16 +17,15 @@ rospack find imu_listener_pkg
 
 echo "[2/4] Detecting FCU serial device"
 FCU_DEVICE=""
-if [ -e "/dev/ttyACM0" ]; then
-    FCU_DEVICE="/dev/ttyACM0"
-elif [ -e "/dev/ttyUSB0" ]; then
-    FCU_DEVICE="/dev/ttyUSB0"
+
+if [ -e "/dev/ttyAML0" ]; then
+    FCU_DEVICE="/dev/ttyAML0"
 fi
 
 if [ -z "$FCU_DEVICE" ]; then
     echo "No FCU serial device found"
     echo "Available serial devices:"
-    ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+    ls /dev/ttyAML* 2>/dev/null || true
     exit 1
 fi
 echo "Found FCU device: $FCU_DEVICE"
