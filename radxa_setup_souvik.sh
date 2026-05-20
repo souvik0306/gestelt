@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WS_DIR="$HOME/px4_sanity/gestelt_ws5"
+WS_DIR="$HOME/gestelt_ws_ai"
 
 # Create workspace folder
 echo "[1/4] Create fresh workspace and clone repositories"

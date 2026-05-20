@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-WS_DIR="$HOME/px4_sanity/gestelt_ws"
+WS_DIR="$HOME/gestelt_ws_ai"
 
 source /opt/ros/noetic/setup.bash
 
