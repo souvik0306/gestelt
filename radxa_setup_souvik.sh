@@ -13,7 +13,7 @@ git clone -b souvik_radxa_v1_16 https://github.com/souvik0306/mavlink.git "$WS_D
 
 # Install Python and MAVROS runtime dependencies
 echo "[2/4] Install dependencies and GeographicLib datasets"
-pip3 install --user onnxruntime pymavlink numpy scipy
+pip3 install --user onnxruntime numpy scipy
 cd "$HOME"
 wget -O install_geographiclib_datasets.sh https://raw.githubusercontent.com/mavlink/mavros/master/mavros/scripts/install_geographiclib_datasets.sh
 sudo bash ./install_geographiclib_datasets.sh
