@@ -23,6 +23,7 @@ source /opt/ros/noetic/setup.bash
 cd $WS_DIR
 source devel/setup.bash
 export PYTHONPATH=$WS_DIR/src/gestelt/imu_listener_pkg/src:\$PYTHONPATH
+
 roslaunch imu_listener_pkg ai_imu_inference.launch
 " C-m
 # FCU URL is configured inside ai_imu_inference.launch 
