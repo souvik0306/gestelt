@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Python packages
-RUN pip3 install --no-cache-dir onnxruntime pymavlink numpy scipy
+RUN pip3 install --no-cache-dir onnxruntime numpy scipy
 
 # Create workspace
 RUN mkdir -p $WS_DIR/src
