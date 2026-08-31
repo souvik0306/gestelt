@@ -317,52 +317,49 @@ class RealtimeIMUInference:
         # Return all four outputs for downstream use
         return corrected_acc, corrected_gyro, acc_var, gyro_var
 
-    def inference_airimu(self,
-                        acc: np.ndarray,
-                        gyro: np.ndarray):
+    def add_sample(self, acc: np.ndarray, gyro: np.ndarray):
         """
-        Process IMU sample and return corrected value for ONLY the latest sample.
-        
-        Pipeline:
-        1. Add incoming sample to 100-sample buffer (FIFO)
-        2. Get full buffer (initially: 99 zeros + samples, eventually: 100 real samples)
-        3. Run inference on entire buffer with padding (adds 9 padding frames)
-        4. Return ONLY the last corrected sample (the one corresponding to the input)
-        
-        This way:
-        - Neural network always has full 100-sample context
-        - But we only return the correction for the latest sample
-        - PX4 gets a 1:1 input:output ratio
+        Add one IMU sample to the rolling buffer without running ONNX inference.
 
-        Args:
-            acc: [3] acceleration vector (m/s^2)
-            gyro: [3] gyroscope vector (rad/s)
-
-        Returns:
-            Tuple of (corrected_acc, corrected_gyro, acc_var, gyro_var), each [3] - only the latest value or full arrays as needed
+        This is useful when the input stream is high rate, but the model should
+        run at a lower output rate, for example feeding 200 Hz samples while
+        running inference every fifth sample.
         """
-        # Ensure inputs are numpy arrays with correct shape
         acc = np.asarray(acc, dtype=np.float32).reshape(3)
         gyro = np.asarray(gyro, dtype=np.float32).reshape(3)
-
-        # Add to buffer (FIFO - shifts old samples out)
         self.buffer.add(acc, gyro)
 
-        # Get full buffer (always 100 samples, padded with zeros initially)
+    def infer_current_buffer(self):
+        """
+        Run ONNX inference on the current rolling buffer.
+
+        Returns only the latest corrected sample, plus the full variance arrays,
+        matching the return format of inference_airimu.
+        """
         acc_batch, gyro_batch = self.buffer.get_arrays()
 
-        # Run inference on full buffer
         corrected_acc_batch, corrected_gyro_batch, acc_var_all, gyro_var_all = self._run_inference(
             acc_batch, gyro_batch
         )
 
-        # Return ONLY the last sample from the batch (most recent) for each output
         return (
             corrected_acc_batch[-1],
             corrected_gyro_batch[-1],
             acc_var_all,
             gyro_var_all
         )
+
+    def inference_airimu(self,
+                        acc: np.ndarray,
+                        gyro: np.ndarray):
+        """
+        Backward compatible single sample API.
+
+        Adds one IMU sample to the rolling buffer, runs ONNX inference
+        immediately, and returns the latest corrected sample plus variance arrays.
+        """
+        self.add_sample(acc, gyro)
+        return self.infer_current_buffer()
 
     def get_statistics(self) -> dict:
         """
@@ -411,4 +408,3 @@ class RealtimeIMUInference:
         """Context manager exit."""
         self.close()
         return False
-

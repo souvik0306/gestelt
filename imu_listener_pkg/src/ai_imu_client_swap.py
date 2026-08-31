@@ -22,8 +22,12 @@ if SCRIPT_DIR not in sys.path:
 from realtime_imu_inference_buffer import RealtimeIMUInference
 
 # ── Config ────────────────────────────────────
-BUFFER_SIZE      = 200
-STATS_INTERVAL_S = 5.0
+BUFFER_SIZE       = 200
+STATS_INTERVAL_S  = 5.0
+TARGET_IMU_HZ     = 200.0
+TARGET_IMU_DT_S   = 1.0 / TARGET_IMU_HZ
+INFERENCE_STRIDE  = 5
+MAX_INTERP_GAP_S  = 0.05
 # Test mode: feed MAVROS Z as model X and MAVROS X as model Z.
 # Output uncertainty is swapped back to MAVROS axis order before publish.
 
@@ -41,12 +45,18 @@ def _load_model(buffer_size: int) -> RealtimeIMUInference:
 # ── Main class ────────────────────────────────
 class AIClientROS:
     def __init__(self):
-        self.running          = False
-        self.sequence_counter = 0
-        self.process_queue    = deque(maxlen=100)
+        self.running                  = False
+        self.sequence_counter         = 0
+        self.virtual_sequence_counter = 0
+        self.infer_counter            = 0
+        self.prev_raw_sample          = None
+        self.next_interp_time_s       = None
+        self.process_queue            = deque(maxlen=300)
 
         self.stats = dict(
             samples_received=0,
+            samples_upsampled=0,
+            samples_buffered=0,
             samples_processed=0,
             samples_published=0,
             corrupted_outputs=0,
@@ -54,6 +64,7 @@ class AIClientROS:
             start_time=None,
             last_stats_time=None,
             last_samples_received=0,
+            last_samples_upsampled=0,
             last_samples_processed=0,
             total_ai_time_ms=0.0,
         )
@@ -78,6 +89,8 @@ class AIClientROS:
         )
 
         print(f"[AI Client] buffer={BUFFER_SIZE}")
+        print(f"[AI Client] interpolation={TARGET_IMU_HZ:.0f}Hz")
+        print(f"[AI Client] inference_stride={INFERENCE_STRIDE}")
         print("[AI Client] sub=/mavros/imu/data_raw")
         print("[AI Client] pub=/mavros/ai/imu_noise")
 
@@ -102,13 +115,73 @@ class AIClientROS:
             self.sequence_counter += 1
             self.stats['samples_received'] += 1
 
-            if len(self.process_queue) >= self.process_queue.maxlen:
-                self.stats['samples_dropped'] += 1
+            for interp_sample in self._interpolate_imu_sample(sample):
+                if len(self.process_queue) >= self.process_queue.maxlen:
+                    self.stats['samples_dropped'] += 1
 
-            self.process_queue.append(sample)
+                self.process_queue.append(interp_sample)
+                self.stats['samples_upsampled'] += 1
 
         except Exception as e:
             rospy.logerr(f"[AI Client] callback error: {e}")
+
+    # ── Timestamp interpolation ───────────────
+    def _make_virtual_sample(self, timestamp_s: float, accel: np.ndarray, gyro: np.ndarray) -> dict:
+        sample = {
+            'timestamp_us': int(timestamp_s * 1e6),
+            'seq': self.virtual_sequence_counter,
+            'gyro': gyro.astype(np.float32),
+            'accel': accel.astype(np.float32),
+        }
+        self.virtual_sequence_counter += 1
+        return sample
+
+    def _interpolate_imu_sample(self, sample: dict):
+        """
+        Convert uneven or lower rate raw IMU messages into a 200 Hz virtual stream.
+
+        Interpolation is timestamp based. For every new raw sample, this function
+        creates all 200 Hz target samples that fall between the previous raw
+        timestamp and the current raw timestamp. Accel and gyro are linearly
+        interpolated axis by axis.
+        """
+        curr_t = sample['timestamp_us'] * 1e-6
+
+        if self.prev_raw_sample is None:
+            self.prev_raw_sample = sample
+            self.next_interp_time_s = curr_t + TARGET_IMU_DT_S
+            return [self._make_virtual_sample(curr_t, sample['accel'], sample['gyro'])]
+
+        prev = self.prev_raw_sample
+        prev_t = prev['timestamp_us'] * 1e-6
+        dt_raw = curr_t - prev_t
+
+        if dt_raw <= 0.0:
+            rospy.logwarn('[AI Client] non increasing IMU timestamp, skipping sample')
+            return []
+
+        if dt_raw > MAX_INTERP_GAP_S:
+            rospy.logwarn(f'[AI Client] large IMU gap {dt_raw:.3f}s, resetting interpolator')
+            self.prev_raw_sample = sample
+            self.next_interp_time_s = curr_t + TARGET_IMU_DT_S
+            return [self._make_virtual_sample(curr_t, sample['accel'], sample['gyro'])]
+
+        out = []
+        target_t = self.next_interp_time_s
+
+        while target_t <= curr_t + 1e-9:
+            ratio = (target_t - prev_t) / dt_raw
+            ratio = min(1.0, max(0.0, ratio))
+
+            accel = prev['accel'] + ratio * (sample['accel'] - prev['accel'])
+            gyro = prev['gyro'] + ratio * (sample['gyro'] - prev['gyro'])
+
+            out.append(self._make_virtual_sample(target_t, accel, gyro))
+            target_t += TARGET_IMU_DT_S
+
+        self.next_interp_time_s = target_t
+        self.prev_raw_sample = sample
+        return out
 
     # ── Inference ─────────────────────────────
     def _infer(self, sample: dict) -> Optional[dict]:
@@ -122,17 +195,26 @@ class AIClientROS:
         acc_model = acc[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
         gyro_model = gyro[[2, 1, 0]] * np.array([1.0, -1.0, 1.0], dtype=np.float64)
 
+        self.inference.add_sample(acc_model, gyro_model)
+        self.stats['samples_buffered'] += 1
+        self.infer_counter += 1
+
+        if self.infer_counter % INFERENCE_STRIDE != 0:
+            return None
+
         t0 = time.time()
-        _, _, acc_var_all, gyro_var_all = self.inference.inference_airimu(acc_model, gyro_model)
+        _, _, acc_var_all, gyro_var_all = self.inference.infer_current_buffer()
         ai_ms = (time.time() - t0) * 1000.0
+        if ai_ms > 30.0:
+            print(f"[AI Client] SLOW INFERENCE: {ai_ms:.1f}ms > 30ms")
         self.stats['total_ai_time_ms'] += ai_ms
 
-        ai_acc_noise_model  = np.asarray(acc_var_all[-1],  dtype=np.float64) #this is the last element of the returned list, which corresponds to the most recent prediction
-        ai_gyro_noise_model = np.asarray(gyro_var_all[-1], dtype=np.float64) #same for gyro
+        ai_acc_noise_model  = np.asarray(acc_var_all[-1],  dtype=np.float64) # latest prediction in model axis order
+        ai_gyro_noise_model = np.asarray(gyro_var_all[-1], dtype=np.float64) # latest prediction in model axis order
 
         # Map model output [z, -y, x] back to MAVROS [x, y, z]
-        ai_acc_noise = ai_acc_noise_model[[2, 1, 0]] * np.array([1.0, 1.0, 1.0], dtype=np.float64)
-        ai_gyro_noise = ai_gyro_noise_model[[2, 1, 0]] * np.array([1.0, 1.0, 1.0], dtype=np.float64)
+        ai_acc_noise = ai_acc_noise_model[[2, 1, 0]]
+        ai_gyro_noise = ai_gyro_noise_model[[2, 1, 0]]
 
         if not (np.isfinite(ai_acc_noise).all() and np.isfinite(ai_gyro_noise).all()):
             rospy.logerr("[AI Client] NaN/Inf output, dropping")
@@ -154,7 +236,7 @@ class AIClientROS:
         self.ai_noise_pub.publish(msg)
 
         n = self.stats['samples_published']
-        if n == 0 or n % 500 == 0:
+        if n == 0 or n % 250 == 0:
             an, gn = noise['ai_acc_noise'], noise['ai_gyro_noise']
             print(f"[ROS #{n}] accel=[{an[0]:.3e},{an[1]:.3e},{an[2]:.3e}] "
                   f"gyro=[{gn[0]:.3e},{gn[1]:.3e},{gn[2]:.3e}] "
@@ -179,18 +261,20 @@ class AIClientROS:
         dt     = now - (self.stats['last_stats_time'] or now)
 
         rx   = self.stats['samples_received']
+        up   = self.stats['samples_upsampled']
         proc = self.stats['samples_processed']
         pub  = self.stats['samples_published']
 
         rx_hz   = (rx   - self.stats['last_samples_received']) / dt if dt > 0 else 0
+        up_hz   = (up   - self.stats['last_samples_upsampled']) / dt if dt > 0 else 0
         proc_hz = (proc - self.stats['last_samples_processed']) / dt if dt > 0 else 0
         avg_ai  = self.stats['total_ai_time_ms'] / proc if proc > 0 else 0
 
         buf_pct = self.inference.buffer.get_fill_percentage()
 
         print(f"\n{'='*60}")
-        print(f"[AI] up={uptime:.0f}s  rx={rx}({rx_hz:.0f}Hz)  "
-              f"proc={proc}({proc_hz:.0f}Hz)  pub={pub}")
+        print(f"[AI] up={uptime:.0f}s  raw={rx}({rx_hz:.0f}Hz)  "
+              f"interp={up}({up_hz:.0f}Hz)  proc={proc}({proc_hz:.0f}Hz)  pub={pub}")
         print(f"     buf={buf_pct:.0f}%  ai={avg_ai:.1f}ms  "
               f"drop={self.stats['samples_dropped']}  "
               f"corrupt={self.stats['corrupted_outputs']}")
@@ -198,6 +282,7 @@ class AIClientROS:
 
         self.stats.update(
             last_samples_received=rx,
+            last_samples_upsampled=up,
             last_samples_processed=proc,
             last_stats_time=now
         )
