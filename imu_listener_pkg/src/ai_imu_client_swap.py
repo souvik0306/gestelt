@@ -35,7 +35,7 @@ MAX_INTERP_GAP_S  = 0.05
 # ── Helpers ───────────────────────────────────
 def _load_model(buffer_size: int) -> RealtimeIMUInference:
     model_path = os.path.join(os.path.dirname(SCRIPT_DIR),
-                              "models", "airimu_cpu_fp32_cov_200.onnx")
+                              "models", "airimu_cpu_fp32_finetuned.onnx")
     if not os.path.isfile(model_path):
         raise FileNotFoundError(f"ONNX model not found: {model_path}")
     print(f"[AI Client] Model: {model_path}")
